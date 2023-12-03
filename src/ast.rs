@@ -2,6 +2,7 @@
 pub enum Expr {
     Integer(u64),
     String(String),
+    Record(Vec<(String, Box<Expr>)>),
     Abstraction(Abstraction),
 
     Variable(String),
@@ -101,6 +102,7 @@ peg::parser! {
             e:string() { Expr::String(e) }
             e:abstraction() { Expr::Abstraction(e) }
             e:scoped() { Expr::Scoped(e) }
+            "{" _ ds:optional_delimited(<decl()>, <",">) _ "}" { Expr::Record(ds) }
             e:match() { Expr::Match(e) }
             "while" _ e:boxed_expr() _ b:boxed_expr() { Expr::While(e, b) }
             "return" _ e:boxed_expr() { Expr::Return(e) }
