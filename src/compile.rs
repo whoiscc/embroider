@@ -70,32 +70,21 @@ impl Compiler {
             })
     }
 
-    pub fn compile_chunk(&mut self, expr: Expr) -> ChunkIndex {
-        let arity;
-        if let Expr::Abstraction(abstration) = expr {
-            arity = abstration.variables.len();
-            self.compile_expr(*abstration.expr)
-        } else {
-            arity = 0;
-            self.compile_expr(expr);
-        };
-        let return_jump_index = self.instrs.len();
-        for return_index in take(&mut self.return_indexes) {
-            let Instr::Jump(index) = &mut self.instrs[return_index] else {
-                unreachable!()
-            };
-            *index = return_jump_index
-        }
+    pub fn compile_chunk(&mut self, expr: Expr) -> anyhow::Result<ChunkIndex> {
+        let saved_instrs = take(&mut self.instrs);
+        let saved_consts = take(&mut self.consts);
+        self.compile_expr(expr)?;
         let chunk_index = self.chunks.len();
-        self.chunks.push(Chunk {
-            arity,
-            instrs: take(&mut self.instrs),
-            consts: take(&mut self.consts),
-        });
-        chunk_index
+        let chunk = Chunk {
+            arity: 0,
+            instrs: replace(&mut self.instrs, saved_instrs),
+            consts: replace(&mut self.consts, saved_consts),
+        };
+        self.chunks.push(chunk);
+        Ok(chunk_index)
     }
 
-    fn compile_expr(&mut self, expr: Expr) {
+    fn compile_expr(&mut self, expr: Expr) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
         match expr {
             Expr::Integer(integer) => {
@@ -112,21 +101,41 @@ impl Compiler {
                 let mut operands = Vec::new();
                 for (name, expr) in rows {
                     self.reg_index += 1;
-                    self.compile_expr(*expr);
+                    self.compile_expr(*expr)?;
                     let symbol = self.intern(name);
                     operands.push((symbol, self.reg_index));
                 }
                 self.instrs.push(Instr::LoadRecord(reg_index, operands))
             }
             Expr::Abstraction(abstraction) => {
-                let instrs = take(&mut self.instrs);
-                let consts = take(&mut self.consts);
+                let arity = abstraction.variables.len();
+                let saved_scopes = take(&mut self.scopes); // TODO
                 self.reg_index = 0;
-                let scopes = take(&mut self.scopes); // TODO
-                let chunk_index = self.compile_chunk(Expr::Abstraction(abstraction));
-                self.instrs = instrs;
-                self.consts = consts;
-                self.scopes = scopes;
+                let mut scope = HashMap::new();
+                for name in abstraction.variables {
+                    scope.insert(name, self.reg_index);
+                    self.reg_index += 1
+                }
+                self.scopes.push(scope);
+                let saved_return_indexes = take(&mut self.return_indexes);
+                let saved_instrs = take(&mut self.instrs);
+                let saved_consts = take(&mut self.consts);
+                self.compile_expr(*abstraction.expr)?;
+                let return_jump_index = self.instrs.len();
+                for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
+                    let Instr::Jump(index) = &mut self.instrs[return_index] else {
+                        unreachable!()
+                    };
+                    *index = return_jump_index
+                }
+                self.scopes = saved_scopes;
+                let chunk_index = self.chunks.len();
+                let chunk = Chunk {
+                    arity,
+                    instrs: replace(&mut self.instrs, saved_instrs),
+                    consts: replace(&mut self.consts, saved_consts),
+                };
+                self.chunks.push(chunk);
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
             }
             Expr::Variable(name) => {
@@ -139,35 +148,37 @@ impl Compiler {
                 }
                 self.instrs.push(Instr::Move(
                     self.reg_index,
-                    found.expect("variable {name} is declared"),
+                    found.ok_or(anyhow::anyhow!("variable {name} is not declared"))?,
                 ))
             }
             Expr::GetField(expr, name) => {
                 self.reg_index += 1;
-                self.compile_expr(*expr);
+                self.compile_expr(*expr)?;
                 let symbol = self.intern(name);
                 self.instrs
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                assert!(self.semi_scope.is_empty(), "nested `with` is not allowed");
+                if !self.semi_scope.is_empty() {
+                    anyhow::bail!("nested `with` is not allowed")
+                }
                 for (i, (name, _)) in scoped.decls.iter().enumerate() {
                     self.semi_scope
                         .insert(name.clone(), self.reg_index + i as RegIndex);
                 }
                 for (_, expr) in scoped.decls {
-                    self.compile_expr(expr);
+                    self.compile_expr(expr)?;
                     self.reg_index += 1
                 }
                 self.scopes.push(take(&mut self.semi_scope));
                 for expr in scoped.exprs {
-                    self.compile_expr(expr)
+                    self.compile_expr(expr)?
                 }
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
             Expr::Operator(op, exprs) => {
                 for expr in exprs {
-                    self.compile_expr(expr);
+                    self.compile_expr(expr)?;
                     self.reg_index += 1
                 }
                 self.instrs.push(Instr::Operator(
@@ -177,10 +188,10 @@ impl Compiler {
                 ))
             }
             Expr::Apply(abstraction, exprs) => {
-                self.compile_expr(*abstraction);
+                self.compile_expr(*abstraction)?;
                 for expr in exprs {
                     self.reg_index += 1;
-                    self.compile_expr(expr)
+                    self.compile_expr(expr)?
                 }
                 self.instrs.push(Instr::Apply(
                     reg_index,
@@ -189,7 +200,7 @@ impl Compiler {
                 ))
             }
             Expr::Mut(name, expr) => {
-                self.compile_expr(*expr);
+                self.compile_expr(*expr)?;
                 let mut found = None;
                 for scope in self.scopes.iter().rev() {
                     if let Some(reg_index) = scope.get(&name) {
@@ -198,22 +209,22 @@ impl Compiler {
                     }
                 }
                 self.instrs.push(Instr::Move(
-                    found.expect("variable {name} is decleared"),
+                    found.ok_or(anyhow::anyhow!("variable {name} is not decleared"))?,
                     reg_index,
                 ));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::MutField(record, name, expr) => {
-                self.compile_expr(*record);
+                self.compile_expr(*record)?;
                 self.reg_index += 1;
-                self.compile_expr(*expr);
+                self.compile_expr(*expr)?;
                 let symbol = self.intern(name);
                 self.instrs
                     .push(Instr::StoreField(reg_index, symbol, self.reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::Match(matching) => {
-                self.compile_expr(*matching.variant);
+                self.compile_expr(*matching.variant)?;
                 let mut converge_indexes = Vec::new();
                 for (tag, name, expr) in matching.cases {
                     let symbol = self.intern(tag);
@@ -228,7 +239,7 @@ impl Compiler {
                     }
                     self.reg_index = reg_index + 2;
                     self.scopes.push(scope);
-                    self.compile_expr(expr);
+                    self.compile_expr(expr)?;
                     self.scopes.pop().unwrap();
                     let match_jump_index = self.instrs.len();
                     let Instr::MatchField(_, _, index) = &mut self.instrs[match_index] else {
@@ -250,7 +261,7 @@ impl Compiler {
                 let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_continue_jump_index =
                     replace(&mut self.continue_jump_index, Some(self.instrs.len()));
-                self.compile_expr(*expr);
+                self.compile_expr(*expr)?;
                 self.instrs
                     .push(Instr::Jump(self.continue_jump_index.unwrap()));
                 let break_jump_index = self.instrs.len();
@@ -263,7 +274,7 @@ impl Compiler {
                 self.continue_jump_index = saved_continue_jump_index
             }
             Expr::Return(expr) => {
-                self.compile_expr(*expr);
+                self.compile_expr(*expr)?;
                 self.instrs.push(Instr::Move(0, reg_index));
                 self.return_indexes.push(self.instrs.len());
                 self.instrs.push(Instr::Jump(InstrIndex::MAX))
@@ -273,9 +284,11 @@ impl Compiler {
                 self.instrs.push(Instr::Jump(InstrIndex::MAX))
             }
             Expr::Continue => self.instrs.push(Instr::Jump(
-                self.continue_jump_index.expect("continue from within loop"),
+                self.continue_jump_index
+                    .ok_or(anyhow::anyhow!("continue from outside loop"))?,
             )),
         }
-        self.reg_index = reg_index
+        self.reg_index = reg_index;
+        Ok(())
     }
 }

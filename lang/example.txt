@@ -1,7 +1,5 @@
 with
-p = {x = 0, y = 0},
+f = func(x) x + 1
 (
-    loop match p.x < 10
-    | True _ ()
-    | False _ break
+    f(42)
 )
