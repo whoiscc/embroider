@@ -20,7 +20,7 @@ pub enum Expr {
     Continue,
 
     Match(Match),
-    While(Box<Expr>, Box<Expr>),
+    Loop(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +57,7 @@ pub enum Operator {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     variant: Box<Expr>,
-    cases: Vec<(String, Option<String>, Box<Expr>)>,
-    fallback_case: Option<Box<Expr>>,
+    cases: Vec<(String, String, Box<Expr>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +103,7 @@ peg::parser! {
             e:scoped() { Expr::Scoped(e) }
             "{" _ ds:optional_delimited(<decl()>, <",">) _ "}" { Expr::Record(ds) }
             e:match() { Expr::Match(e) }
-            "while" _ e:boxed_expr() _ b:boxed_expr() { Expr::While(e, b) }
+            "loop" _ e:boxed_expr() { Expr::Loop(e) }
             "return" _ e:boxed_expr() { Expr::Return(e) }
             "break" { Expr::Break }
             "continue" { Expr::Continue }
@@ -151,17 +150,12 @@ peg::parser! {
             = v:variable() _ "=" _ e:boxed_expr() { (v, e) }
 
         rule match() -> Match
-            = "match" _ e:boxed_expr()
-            _ cs:optional_delimited(<case()>, <",">)
-            _ d:case_fallback()?
+            = "match" _ e:boxed_expr() _ cs:(case() ** _)
         {
-            Match { variant: e, cases: cs, fallback_case: d }
+            Match { variant: e, cases: cs }
         }
 
-        rule case() -> (String, Option<String>, Box<Expr>)
-            = t:variable() _ v:variable()? _ e:boxed_expr() { (t, v, e) }
-
-        rule case_fallback() -> Box<Expr> = "default" _ e:boxed_expr() { e }
-
+        rule case() -> (String, String, Box<Expr>)
+            = "|" _ t:variable() _ v:variable() _ e:boxed_expr() { (t, v, e) }
     }
 }

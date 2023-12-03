@@ -1,6 +1,7 @@
 with
 p = {x = 0, y = 0},
 (
-    while p.x < 10
-        p mut.x 1
+    loop match p.x < 10
+    | True _ ()
+    | False _ break
 )
