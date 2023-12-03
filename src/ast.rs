@@ -1,15 +1,25 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Unit,
     Integer(u64),
     String(String),
     Abstraction(Abstraction),
 
-    Scoped((), Box<Expr>),
+    Variable(String),
+
+    GetField(Box<Expr>, String),
+    Scoped(Scoped),
     Operator(Operator, Vec<Expr>),
     Apply(Box<Expr>, Vec<Expr>),
 
-    Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    Mut(Box<Expr>, Box<Expr>),
+    MutField(Box<Expr>, String, Box<Expr>),
+
+    Return(Box<Expr>),
+    Break,
+    Continue,
+
+    Match(Match),
+    While(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +31,7 @@ pub struct Abstraction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoped {
     decls: Vec<(String, Box<Expr>)>,
-    stmts: Vec<Stmt>,
-    value: Box<Expr>,
+    exprs: Vec<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,14 +45,121 @@ pub enum Operator {
     And,
     Or,
     Not,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    variant: Box<Expr>,
+    cases: Vec<(String, Option<String>, Box<Expr>)>,
+    fallback_case: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Return(Box<Expr>),
-    Break,
-    Continue,
-    While(Box<Expr>, Box<Expr>),
-    MutEnv(String, Box<Expr>),
-    MutField(Box<Expr>, String, Box<Expr>),
+    Expr(Box<Expr>),
+}
+
+peg::parser! {
+    pub grammar parse() for str {
+        pub rule boxed_expr() -> Box<Expr> = e:expr() { Box::new(e) }
+
+        pub rule expr() -> Expr = precedence! {
+            e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
+            e:@ _ "mut" _ m:boxed_expr() { Expr::Mut(Box::new(e), m) }
+            --
+            e:(@) _ "or" _ x:@ { Expr::Operator(Operator::Or, vec![e, x]) }
+            --
+            e:(@) _ "and" _ x:@ { Expr::Operator(Operator::And, vec![e, x]) }
+            --
+            e:(@) _ "+" _ x:@ { Expr::Operator(Operator::Add, vec![e, x]) }
+            e:(@) _ "-" _ x:@ { Expr::Operator(Operator::Sub, vec![e, x]) }
+            --
+            e:(@) _ "*" _ x:@ { Expr::Operator(Operator::Mul, vec![e, x]) }
+            e:(@) _ "/" _ x:@ { Expr::Operator(Operator::Div, vec![e, x]) }
+            e:(@) _ "%" _ x:@ { Expr::Operator(Operator::Rem, vec![e, x]) }
+            --
+            e:(@) _ "==" _ x:@ { Expr::Operator(Operator::Eq, vec![e, x]) }
+            e:(@) _ "!=" _ x:@ { Expr::Operator(Operator::Ne, vec![e, x]) }
+            e:(@) _ "<=" _ x:@ { Expr::Operator(Operator::Le, vec![e, x]) }
+            e:(@) _ ">=" _ x:@ { Expr::Operator(Operator::Ge, vec![e, x]) }
+            e:(@) _ "<" _ x:@ { Expr::Operator(Operator::Lt, vec![e, x]) }
+            e:(@) _ ">" _ x:@ { Expr::Operator(Operator::Gt, vec![e, x]) }
+            --
+            "not" _ e:@ { Expr::Operator(Operator::Not, vec![e]) }
+            --
+            e:@ "." v:variable() { Expr::GetField(Box::new(e), v) }
+            e:@ "(" _ es:optional_delimited(<expr()>, <",">) _ ")"
+                { Expr::Apply(Box::new(e), es) }
+            --
+            e:integer() { Expr::Integer(e) }
+            e:string() { Expr::String(e) }
+            e:abstraction() { Expr::Abstraction(e) }
+            e:scoped() { Expr::Scoped(e) }
+            e:match() { Expr::Match(e) }
+            "while" _ e:boxed_expr() _ b:boxed_expr() { Expr::While(e, b) }
+            "return" _ e:boxed_expr() { Expr::Return(e) }
+            "break" { Expr::Break }
+            "continue" { Expr::Continue }
+            e:variable() { Expr::Variable(e) }
+        }
+
+        rule _ = quiet!{[' ' | '\n']*}
+
+        rule optional_delimited<T>(x: rule<T>, delim: rule<()>) -> Vec<T>
+            = xs:(x() ** ((_ delim() _)?)) _ delim()? { xs }
+
+        rule integer() -> u64
+            = n:$(['0'..='9']+) {? n.parse().or(Err("invalid u64 liternal")) }
+
+        rule string() -> String
+            = "\"" n:$([^'"']*) "\"" { n.into() }
+
+        rule abstraction() -> Abstraction
+            = "func"
+            _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
+            _ e:boxed_expr()
+        {
+            Abstraction { variables: vs, expr: e }
+        }
+
+        rule variable() -> String
+            = "_" { "*".into() }
+            / v:$(['a'..='z' | 'A'..='Z'] ['a'..='z' | 'A'..='Z' | '0'..='9']*)
+        {
+            v.into()
+        }
+
+        rule scoped() -> Scoped
+            = ds:decls() _ "(" _ es:optional_delimited(<expr()>, <";">) _ ")"
+        {
+            Scoped { decls: ds, exprs: es }
+        }
+
+        rule decls() -> Vec<(String, Box<Expr>)>
+            = "with" _ ds:optional_delimited(<decl()>, <_ "," _>) { ds }
+            / { Vec::new() }
+
+        rule decl() -> (String, Box<Expr>)
+            = v:variable() _ "=" _ e:boxed_expr() { (v, e) }
+
+        rule match() -> Match
+            = "match" _ e:boxed_expr()
+            _ cs:optional_delimited(<case()>, <",">)
+            _ d:case_fallback()?
+        {
+            Match { variant: e, cases: cs, fallback_case: d }
+        }
+
+        rule case() -> (String, Option<String>, Box<Expr>)
+            = t:variable() _ v:variable()? _ e:boxed_expr() { (t, v, e) }
+
+        rule case_fallback() -> Box<Expr> = "default" _ e:boxed_expr() { e }
+
+    }
 }
