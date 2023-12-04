@@ -1,5 +1,6 @@
 with
-f = func(x) x + 1
+f = func(x) g(x) + 1,
+g = func(x) f(x) - 1,
 (
     f(42)
 )

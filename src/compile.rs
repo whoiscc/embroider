@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Display,
     mem::{replace, take},
 };
@@ -22,7 +22,7 @@ pub enum Instr {
 
     Move(RegIndex, RegIndex),
     Operator(RegIndex, Operator, Vec<RegIndex>),
-    Apply(RegIndex, RegIndex, Vec<RegIndex>),
+    Apply(RegIndex, usize),
 
     StoreField(RegIndex, Symbol, RegIndex),
 
@@ -54,6 +54,8 @@ pub struct Compiler {
     reg_index: RegIndex,
     scopes: Vec<HashMap<String, RegIndex>>,
     quasi_scope: HashMap<String, RegIndex>,
+    capture_scopes: Vec<HashMap<String, RegIndex>>,
+    captures: HashSet<String>,
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
@@ -85,6 +87,31 @@ impl Compiler {
         Ok(chunk_index)
     }
 
+    pub fn resolve(&mut self, name: String, capturing: bool) -> anyhow::Result<RegIndex> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(reg_index) = scope.get(&name) {
+                return Ok(*reg_index);
+            }
+        }
+        if !capturing {
+            anyhow::bail!("variable {name} not defined (without capturing)")
+        }
+        let symbol = self.intern(name.clone());
+        for scope in self.capture_scopes.iter().rev() {
+            if let Some(reg_index) = scope.get(&name) {
+                self.captures.insert(name.clone());
+                self.instrs
+                    .push(Instr::LoadField(self.reg_index, 0, symbol));
+                return Ok(*reg_index);
+            }
+        }
+        Err(anyhow::anyhow!("variable {name} not defined"))
+    }
+
+    // convention: anything below `self.reg_index` is unchanged
+    // `self.reg_index` is updated with expr's evaluated value
+    // anything above `self.ref_index` is ok to be overwritten
+    // return, break and continue does not follow this convention
     fn compile_expr(&mut self, expr: Expr) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
         match expr {
@@ -110,12 +137,16 @@ impl Compiler {
             }
             Expr::Abstraction(abstraction) => {
                 let arity = abstraction.variables.len();
-                let saved_scopes = take(&mut self.scopes); // TODO
+                let saved_scopes = take(&mut self.scopes);
+                let saved_quasi_scope = take(&mut self.quasi_scope);
+                let saved_capture_scopes = self.capture_scopes.clone();
+                self.capture_scopes.extend(saved_scopes.clone());
+                self.capture_scopes.push(saved_quasi_scope.clone());
                 self.reg_index = 0;
                 let mut scope = HashMap::new();
                 for name in abstraction.variables {
+                    self.reg_index += 1;
                     scope.insert(name, self.reg_index);
-                    self.reg_index += 1
                 }
                 self.scopes.push(scope);
                 let saved_return_indexes = take(&mut self.return_indexes);
@@ -130,6 +161,8 @@ impl Compiler {
                     *index = return_jump_index
                 }
                 self.scopes = saved_scopes;
+                self.quasi_scope = saved_quasi_scope;
+                self.capture_scopes = saved_capture_scopes;
                 let chunk_index = self.chunks.len();
                 let chunk = Chunk {
                     arity,
@@ -140,17 +173,8 @@ impl Compiler {
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
             }
             Expr::Variable(name) => {
-                let mut found = None;
-                for scope in self.scopes.iter().rev() {
-                    if let Some(reg_index) = scope.get(&name) {
-                        found = Some(*reg_index);
-                        break;
-                    }
-                }
-                self.instrs.push(Instr::Move(
-                    self.reg_index,
-                    found.ok_or(anyhow::anyhow!("variable {name} is not defined"))?,
-                ))
+                let resolved = self.resolve(name, true)?;
+                self.instrs.push(Instr::Move(self.reg_index, resolved))
             }
             Expr::GetField(expr, name) => {
                 self.reg_index += 1;
@@ -167,11 +191,26 @@ impl Compiler {
                     self.quasi_scope
                         .insert(name.clone(), self.reg_index + i as RegIndex);
                 }
+                let mut captures = HashMap::new();
+                let saved_captures = take(&mut self.captures);
                 for (_, expr) in scoped.decls {
                     self.compile_expr(expr)?;
+                    captures.insert(self.reg_index, take(&mut self.captures));
                     self.reg_index += 1
                 }
+                self.captures = saved_captures;
                 self.scopes.push(take(&mut self.quasi_scope));
+                for (reg_index, captures) in captures {
+                    // assert `reg_index` stores an abstraction
+                    for name in captures {
+                        let resolved = self
+                            .resolve(name.clone(), true)
+                            .expect("same resolving to closure");
+                        let symbol = self.intern(name);
+                        self.instrs
+                            .push(Instr::StoreField(reg_index, symbol, resolved))
+                    }
+                }
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
                 }
@@ -195,29 +234,17 @@ impl Compiler {
             }
             Expr::Apply(abstraction, exprs) => {
                 self.compile_expr(*abstraction)?;
+                let arity = exprs.len();
                 for expr in exprs {
                     self.reg_index += 1;
                     self.compile_expr(expr)?
                 }
-                self.instrs.push(Instr::Apply(
-                    reg_index,
-                    reg_index,
-                    (reg_index..=self.reg_index).collect(),
-                ))
+                self.instrs.push(Instr::Apply(reg_index, arity))
             }
             Expr::Mut(name, expr) => {
                 self.compile_expr(*expr)?;
-                let mut found = None;
-                for scope in self.scopes.iter().rev() {
-                    if let Some(reg_index) = scope.get(&name) {
-                        found = Some(*reg_index);
-                        break;
-                    }
-                }
-                self.instrs.push(Instr::Move(
-                    found.ok_or(anyhow::anyhow!("variable {name} is not defined"))?,
-                    reg_index,
-                ));
+                let resolved = self.resolve(name, false)?;
+                self.instrs.push(Instr::Move(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::MutField(record, name, expr) => {
