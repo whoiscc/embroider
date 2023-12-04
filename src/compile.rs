@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     mem::{replace, take},
 };
 
@@ -52,7 +53,7 @@ pub struct Compiler {
     consts: Vec<Const>,
     reg_index: RegIndex,
     scopes: Vec<HashMap<String, RegIndex>>,
-    semi_scope: HashMap<String, RegIndex>,
+    quasi_scope: HashMap<String, RegIndex>,
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
@@ -148,7 +149,7 @@ impl Compiler {
                 }
                 self.instrs.push(Instr::Move(
                     self.reg_index,
-                    found.ok_or(anyhow::anyhow!("variable {name} is not declared"))?,
+                    found.ok_or(anyhow::anyhow!("variable {name} is not defined"))?,
                 ))
             }
             Expr::GetField(expr, name) => {
@@ -159,20 +160,25 @@ impl Compiler {
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                if !self.semi_scope.is_empty() {
+                if !self.quasi_scope.is_empty() {
                     anyhow::bail!("nested `with` is not allowed")
                 }
                 for (i, (name, _)) in scoped.decls.iter().enumerate() {
-                    self.semi_scope
+                    self.quasi_scope
                         .insert(name.clone(), self.reg_index + i as RegIndex);
                 }
                 for (_, expr) in scoped.decls {
                     self.compile_expr(expr)?;
                     self.reg_index += 1
                 }
-                self.scopes.push(take(&mut self.semi_scope));
+                self.scopes.push(take(&mut self.quasi_scope));
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
+                }
+                if let Some(expr) = scoped.value_expr {
+                    self.compile_expr(*expr)?
+                } else {
+                    self.instrs.push(Instr::LoadUnit(self.reg_index))
                 }
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
@@ -209,7 +215,7 @@ impl Compiler {
                     }
                 }
                 self.instrs.push(Instr::Move(
-                    found.ok_or(anyhow::anyhow!("variable {name} is not decleared"))?,
+                    found.ok_or(anyhow::anyhow!("variable {name} is not defined"))?,
                     reg_index,
                 ));
                 self.instrs.push(Instr::LoadUnit(reg_index))
@@ -289,6 +295,31 @@ impl Compiler {
             )),
         }
         self.reg_index = reg_index;
+        Ok(())
+    }
+
+    pub fn disassemble(&self, index: ChunkIndex) -> DisassembleChunk<'_> {
+        DisassembleChunk {
+            compiler: self,
+            chunk: &self.chunks[index],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisassembleChunk<'a> {
+    compiler: &'a Compiler,
+    chunk: &'a Chunk,
+}
+
+impl Display for DisassembleChunk<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, instr) in self.chunk.instrs.iter().enumerate() {
+            write!(f, "{index:>4} {instr:?}")?;
+            if index != self.chunk.instrs.len() - 1 {
+                writeln!(f)?
+            }
+        }
         Ok(())
     }
 }

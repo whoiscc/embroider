@@ -12,11 +12,7 @@ fn main() -> anyhow::Result<()> {
     let expr = ast::parse::expr(&source)?;
     println!("{:?}", expr);
     let mut compiler = Compiler::default();
-    compiler.compile_chunk(expr)?;
-    for chunk in &compiler.chunks {
-        for (i, instr) in chunk.instrs.iter().enumerate() {
-            println!("{i:>4} {instr:?}")
-        }
-    }
+    let chunk_index = compiler.compile_chunk(expr)?;
+    println!("{}", compiler.disassemble(chunk_index));
     Ok(())
 }

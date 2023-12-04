@@ -33,6 +33,7 @@ pub struct Abstraction {
 pub struct Scoped {
     pub decls: Vec<(String, Expr)>,
     pub exprs: Vec<Expr>,
+    pub value_expr: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,22 +122,23 @@ peg::parser! {
             = "func"
             _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
             _ e:boxed_expr()
-        {
-            Abstraction { variables: vs, expr: e }
-        }
+            { Abstraction { variables: vs, expr: e } }
 
         rule variable() -> String
             = "_" { "*".into() }
             / v:$(['a'..='z' | 'A'..='Z'] ['a'..='z' | 'A'..='Z' | '0'..='9']*)
-        {
-            v.into()
-        }
+            { v.into() }
 
         rule scoped() -> Scoped
-            = ds:decls() _ "(" _ es:optional_delimited(<expr()>, <";">) _ ")"
-        {
-            Scoped { decls: ds, exprs: es }
-        }
+            = ds:decls()
+            _ "(" _ es:optional_delimited(<expr()>, <";">) _ e:boxed_expr() ")"
+            { Scoped { decls: ds, exprs: es, value_expr: Some(e) } }
+            / ds:decls()
+            _ "(" _ es:optional_delimited(<expr()>, <";">) _ ";" _ ")"
+            { Scoped { decls: ds, exprs: es, value_expr: None } }
+            / ds:decls()
+            _ "(" _ e:boxed_expr() _ ")"
+            { Scoped { decls: ds, exprs: Vec::new(), value_expr: Some(e)} }
 
         rule decls() -> Vec<(String, Expr)>
             = "with" _ ds:optional_delimited(<decl()>, <_ "," _>) { ds }
@@ -147,9 +149,7 @@ peg::parser! {
 
         rule match() -> Match
             = "match" _ e:boxed_expr() _ cs:(case() ** _)
-        {
-            Match { variant: e, cases: cs }
-        }
+            { Match { variant: e, cases: cs } }
 
         rule case() -> (String, String, Expr)
             = "|" _ t:variable() _ v:variable() _ e:expr() { (t, v, e) }
