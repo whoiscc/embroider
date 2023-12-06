@@ -1,10 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     fmt::Display,
     mem::{replace, take},
 };
 
-use crate::ast::{Expr, Operator};
+use crate::ast::{Expr, ExprO, Operator};
 
 pub type Symbol = usize;
 pub type ConstIndex = usize;
@@ -63,6 +64,17 @@ pub struct Compiler {
     description_hint: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileError(pub String, pub usize);
+
+impl Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl Error for CompileError {}
+
 impl Compiler {
     fn intern(&mut self, symbol: String) -> Symbol {
         *self
@@ -75,7 +87,7 @@ impl Compiler {
             })
     }
 
-    pub fn compile_chunk(&mut self, expr: Expr) -> anyhow::Result<ChunkIndex> {
+    pub fn compile_chunk(&mut self, expr: ExprO) -> anyhow::Result<ChunkIndex> {
         let saved_instrs = take(&mut self.instrs);
         let saved_consts = take(&mut self.consts);
         self.compile_expr(expr)?;
@@ -90,14 +102,14 @@ impl Compiler {
         Ok(chunk_index)
     }
 
-    pub fn resolve(&mut self, name: String, capturing: bool) -> anyhow::Result<RegIndex> {
+    pub fn resolve(&mut self, name: String, capturing: bool) -> Option<RegIndex> {
         for scope in self.scopes.iter().rev() {
             if let Some(reg_index) = scope.get(&name) {
-                return Ok(*reg_index);
+                return Some(*reg_index);
             }
         }
         if !capturing {
-            anyhow::bail!("variable {name} not defined (without capturing)")
+            return None;
         }
         let symbol = self.intern(name.clone());
         for scope in self.capture_scopes.iter().rev() {
@@ -106,19 +118,20 @@ impl Compiler {
                 // is it always safe to directly use slot `self.reg_index`?
                 self.instrs
                     .push(Instr::LoadField(self.reg_index, 0, symbol));
-                return Ok(self.reg_index);
+                return Some(self.reg_index);
             }
         }
-        Err(anyhow::anyhow!("variable {name} not defined"))
+        None
     }
 
     // convention: anything below `self.reg_index` is unchanged
     // `self.reg_index` is updated with expr's evaluated value
     // anything above `self.ref_index` is ok to be overwritten
     // return, break and continue does not follow this convention
-    fn compile_expr(&mut self, expr: Expr) -> anyhow::Result<()> {
+    fn compile_expr(&mut self, expr: ExprO) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
-        match expr {
+        let offset = expr.1;
+        match expr.0 {
             Expr::Integer(integer) => {
                 self.instrs
                     .push(Instr::LoadConst(reg_index, self.consts.len()));
@@ -178,7 +191,10 @@ impl Compiler {
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
             }
             Expr::Variable(name) => {
-                let resolved = self.resolve(name, true)?;
+                let resolved = self.resolve(name.clone(), true).ok_or(CompileError(
+                    format!("varaible {name} is not defined"),
+                    offset,
+                ))?;
                 self.instrs.push(Instr::Move(self.reg_index, resolved))
             }
             Expr::GetField(expr, name) => {
@@ -189,38 +205,42 @@ impl Compiler {
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                if !self.quasi_scope.is_empty() {
-                    anyhow::bail!("nested `with` is not allowed")
-                }
-                self.quasi_scope = scoped
-                    .decls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
-                    .collect();
-                let mut captures = HashMap::new();
-                let saved_captures = take(&mut self.captures);
                 self.scopes.push(Default::default());
-                let saved_description_hint = take(&mut self.description_hint);
-                for (name, expr) in scoped.decls {
-                    self.description_hint = name.clone();
-                    self.compile_expr(expr)?;
-                    self.scopes.last_mut().unwrap().insert(name, self.reg_index);
-                    captures.insert(self.reg_index, take(&mut self.captures));
-                    self.reg_index += 1
-                }
-                self.captures = saved_captures;
-                self.description_hint = saved_description_hint;
-                for (reg_index, captures) in captures {
-                    // assert `reg_index` stores an abstraction
-                    for name in captures {
-                        let resolved = self
-                            .resolve(name.clone(), true)
-                            .expect("same resolving to closure");
-                        let symbol = self.intern(name);
-                        self.instrs
-                            .push(Instr::StoreField(reg_index, symbol, resolved))
+                if !scoped.decls.is_empty() {
+                    if !self.quasi_scope.is_empty() {
+                        Err(CompileError("nested `with` is not allowed".into(), offset))?
                     }
+                    self.quasi_scope = scoped
+                        .decls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
+                        .collect();
+                    let mut captures = HashMap::new();
+                    let saved_captures = take(&mut self.captures);
+                    let saved_description_hint = take(&mut self.description_hint);
+                    for (name, expr) in scoped.decls {
+                        self.description_hint = name.clone();
+                        self.compile_expr(expr)?;
+                        self.scopes.last_mut().unwrap().insert(name, self.reg_index);
+                        captures.insert(self.reg_index, take(&mut self.captures));
+                        self.reg_index += 1
+                    }
+                    self.description_hint = saved_description_hint;
+                    for (reg_index, captures) in captures {
+                        // assert `reg_index` stores an abstraction
+                        for name in captures {
+                            let resolved = self
+                                .resolve(name.clone(), true)
+                                .expect("same resolving to closure");
+                            let symbol = self.intern(name);
+                            self.instrs
+                                .push(Instr::StoreField(reg_index, symbol, resolved))
+                        }
+                    }
+                    self.captures = saved_captures;
+                    take(&mut self.quasi_scope);
+                } else {
                 }
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
@@ -255,7 +275,10 @@ impl Compiler {
             }
             Expr::Mut(name, expr) => {
                 self.compile_expr(*expr)?;
-                let resolved = self.resolve(name, false)?;
+                let resolved = self.resolve(name.clone(), false).ok_or(CompileError(
+                    format!("cannot find or capture variable {name} for mutation"),
+                    offset,
+                ))?;
                 self.instrs.push(Instr::Move(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
