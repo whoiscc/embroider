@@ -38,6 +38,7 @@ pub enum Const {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
+    pub description: String,
     pub arity: usize,
     pub instrs: Vec<Instr>,
     pub consts: Vec<Const>,
@@ -59,6 +60,7 @@ pub struct Compiler {
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
+    description_hint: String,
 }
 
 impl Compiler {
@@ -79,6 +81,7 @@ impl Compiler {
         self.compile_expr(expr)?;
         let chunk_index = self.chunks.len();
         let chunk = Chunk {
+            description: "<main>".into(),
             arity: 0,
             instrs: replace(&mut self.instrs, saved_instrs),
             consts: replace(&mut self.consts, saved_consts),
@@ -98,11 +101,12 @@ impl Compiler {
         }
         let symbol = self.intern(name.clone());
         for scope in self.capture_scopes.iter().rev() {
-            if let Some(reg_index) = scope.get(&name) {
+            if scope.get(&name).is_some() {
                 self.captures.insert(name.clone());
+                // is it always safe to directly use slot `self.reg_index`?
                 self.instrs
                     .push(Instr::LoadField(self.reg_index, 0, symbol));
-                return Ok(*reg_index);
+                return Ok(self.reg_index);
             }
         }
         Err(anyhow::anyhow!("variable {name} not defined"))
@@ -129,7 +133,7 @@ impl Compiler {
                 let mut operands = Vec::new();
                 for (name, expr) in rows {
                     self.reg_index += 1;
-                    self.compile_expr(*expr)?;
+                    self.compile_expr(expr)?;
                     let symbol = self.intern(name);
                     operands.push((symbol, self.reg_index));
                 }
@@ -142,16 +146,16 @@ impl Compiler {
                 let saved_capture_scopes = self.capture_scopes.clone();
                 self.capture_scopes.extend(saved_scopes.clone());
                 self.capture_scopes.push(saved_quasi_scope.clone());
-                self.reg_index = 0;
                 let mut scope = HashMap::new();
-                for name in abstraction.variables {
-                    self.reg_index += 1;
-                    scope.insert(name, self.reg_index);
+                for (i, name) in abstraction.variables.into_iter().enumerate() {
+                    // reserve register 0 for capturing record
+                    scope.insert(name, i as RegIndex + 1);
                 }
                 self.scopes.push(scope);
                 let saved_return_indexes = take(&mut self.return_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
+                self.reg_index = 0;
                 self.compile_expr(*abstraction.expr)?;
                 let return_jump_index = self.instrs.len();
                 for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
@@ -165,6 +169,7 @@ impl Compiler {
                 self.capture_scopes = saved_capture_scopes;
                 let chunk_index = self.chunks.len();
                 let chunk = Chunk {
+                    description: self.description_hint.clone(),
                     arity,
                     instrs: replace(&mut self.instrs, saved_instrs),
                     consts: replace(&mut self.consts, saved_consts),
@@ -187,19 +192,25 @@ impl Compiler {
                 if !self.quasi_scope.is_empty() {
                     anyhow::bail!("nested `with` is not allowed")
                 }
-                for (i, (name, _)) in scoped.decls.iter().enumerate() {
-                    self.quasi_scope
-                        .insert(name.clone(), self.reg_index + i as RegIndex);
-                }
+                self.quasi_scope = scoped
+                    .decls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
+                    .collect();
                 let mut captures = HashMap::new();
                 let saved_captures = take(&mut self.captures);
-                for (_, expr) in scoped.decls {
+                self.scopes.push(Default::default());
+                let saved_description_hint = take(&mut self.description_hint);
+                for (name, expr) in scoped.decls {
+                    self.description_hint = name.clone();
                     self.compile_expr(expr)?;
+                    self.scopes.last_mut().unwrap().insert(name, self.reg_index);
                     captures.insert(self.reg_index, take(&mut self.captures));
                     self.reg_index += 1
                 }
                 self.captures = saved_captures;
-                self.scopes.push(take(&mut self.quasi_scope));
+                self.description_hint = saved_description_hint;
                 for (reg_index, captures) in captures {
                     // assert `reg_index` stores an abstraction
                     for name in captures {
@@ -219,6 +230,7 @@ impl Compiler {
                 } else {
                     self.instrs.push(Instr::LoadUnit(self.reg_index))
                 }
+                self.scopes.pop().unwrap();
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
             Expr::Operator(op, exprs) => {
@@ -259,29 +271,31 @@ impl Compiler {
             Expr::Match(matching) => {
                 self.compile_expr(*matching.variant)?;
                 let mut converge_indexes = Vec::new();
+                self.reg_index = reg_index + 2;
                 for (tag, name, expr) in matching.cases {
                     let symbol = self.intern(tag);
                     let match_index = self.instrs.len();
                     self.instrs
                         .push(Instr::MatchField(reg_index, symbol, InstrIndex::MAX));
                     let mut scope = HashMap::new();
-                    if name != "*" {
+                    if let Some(name) = name {
                         self.instrs
                             .push(Instr::LoadField(reg_index + 1, reg_index, symbol));
                         scope.insert(name, reg_index + 1);
                     }
-                    self.reg_index = reg_index + 2;
                     self.scopes.push(scope);
                     self.compile_expr(expr)?;
+                    converge_indexes.push(self.instrs.len());
+                    self.instrs.push(Instr::Jump(InstrIndex::MAX));
                     self.scopes.pop().unwrap();
                     let match_jump_index = self.instrs.len();
                     let Instr::MatchField(_, _, index) = &mut self.instrs[match_index] else {
                         unreachable!()
                     };
-                    *index = match_jump_index;
-                    converge_indexes.push(self.instrs.len());
-                    self.instrs.push(Instr::Jump(InstrIndex::MAX))
+                    *index = match_jump_index
                 }
+                // all matching failed: evaluate to unit
+                self.instrs.push(Instr::LoadUnit(self.reg_index));
                 let converge_jump_index = self.instrs.len();
                 for index in converge_indexes {
                     let Instr::Jump(index) = &mut self.instrs[index] else {
@@ -289,6 +303,7 @@ impl Compiler {
                     };
                     *index = converge_jump_index
                 }
+                self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
             Expr::Loop(expr) => {
                 let saved_break_indexes = take(&mut self.break_indexes);
@@ -328,7 +343,7 @@ impl Compiler {
     pub fn disassemble(&self, index: ChunkIndex) -> DisassembleChunk<'_> {
         DisassembleChunk {
             compiler: self,
-            chunk: &self.chunks[index],
+            chunk_index: index,
         }
     }
 }
@@ -336,14 +351,16 @@ impl Compiler {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisassembleChunk<'a> {
     compiler: &'a Compiler,
-    chunk: &'a Chunk,
+    chunk_index: usize,
 }
 
 impl Display for DisassembleChunk<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (index, instr) in self.chunk.instrs.iter().enumerate() {
-            write!(f, "{index:>4} {instr:?}")?;
-            if index != self.chunk.instrs.len() - 1 {
+        let chunk = &self.compiler.chunks[self.chunk_index];
+        writeln!(f, "chunk {} {}", self.chunk_index, chunk.description)?;
+        for (index, instr) in chunk.instrs.iter().enumerate() {
+            write!(f, "  {index:>4} {instr:?}")?;
+            if index != chunk.instrs.len() - 1 {
                 writeln!(f)?
             }
         }

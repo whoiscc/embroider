@@ -1,0 +1,12 @@
+with
+    print = func() (),
+    clock = func() (),
+    str = func() (),
+    fib = func(n) match n < 2
+        | {True} n
+        | {False} fib(n - 2) + fib(n - 1),
+    start = clock(),
+(
+    print(str(fib(35) == 9227465));
+    print(str(clock() - start));
+)

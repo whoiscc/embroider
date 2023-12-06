@@ -1,0 +1,54 @@
+with
+    tree = func(item, depth) match depth > 0
+        | {True} with
+            item2 = item + item,
+            left = tree(item2 - 1, depth - 1),
+            right = tree(item2, depth - 1) 
+            ({item: item, depth: depth, left: some(left), right: some(right)})
+        | {False}
+            {item: item, depth: depth, left: none, right: none},
+    check = func(node) match node.left
+        | {None} node.item,
+        | {Some} node.item + check(node.left.Some) - check(node.right.Some),
+    min_depth = 4,
+    max_depth = 14,
+    stretch_depth = maxDepth + 1,
+    start = clock(),
+(
+    print("stretch tree of depth " + str(stretch_depth))
+    print("check: " + check(tree(0, stretch_depth)))
+
+with
+    long_lived_tree = tree(0, max_depth),
+    iterations = 1,
+    d = 0,
+(
+    loop match d < max_depth | {False} break | {True} (
+        iterations mut iterations * 2;
+        d mut d + 1;
+    )
+
+with
+    depth = min_depth,
+(
+    loop match depth < stretch_depth | {False} break | {True} with
+        check = 0,
+        i = 1,
+    (
+        loop match i <= iteration | {False} break | {True} (
+            check mut check + check(tree(i, depth)) + check(tree(-i, depth));
+            i mut i + 1;
+        )
+
+        print("num trees: " + str(iterations * 2));
+        print("depth: " + str(depth));
+        print("check: " + str(check));
+
+        iterations mut iterations / 4;
+        depth mut depth + 2;
+    )
+
+    print("love lived tree of depth: " + str(max_depth));
+    print("check: " + str(check(long_lived_tree)));
+    print("elapsed: " + str(clock() - start));
+)))

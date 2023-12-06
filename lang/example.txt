@@ -1,6 +1,7 @@
 with
-f = func(x) g(x) + 1,
-g = func(x) f(x) - 1,
+    print = func() (),
+    f = func(x) g(x) + 1,
+    g = func(x) f(x) - 1,
 (
-    f(42)
+    print(f(42))
 )

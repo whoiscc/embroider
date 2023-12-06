@@ -2,7 +2,7 @@
 pub enum Expr {
     Integer(u64),
     String(String),
-    Record(Vec<(String, Box<Expr>)>),
+    Record(Vec<(String, Expr)>),
     Abstraction(Abstraction),
 
     Variable(String),
@@ -58,7 +58,7 @@ pub enum Operator {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     pub variant: Box<Expr>,
-    pub cases: Vec<(String, String, Expr)>,
+    pub cases: Vec<(String, Option<String>, Expr)>,
 }
 
 peg::parser! {
@@ -97,8 +97,7 @@ peg::parser! {
             e:string() { Expr::String(e) }
             e:abstraction() { Expr::Abstraction(e) }
             e:scoped() { Expr::Scoped(e) }
-            "{" _ ds:optional_delimited(<decl()>, <",">) _ "}"
-                { Expr::Record(ds.into_iter().map(|(n, e)| (n, Box::new(e))).collect()) }
+            e:record() { Expr::Record(e) }
             e:match() { Expr::Match(e) }
             "loop" _ e:boxed_expr() { Expr::Loop(e) }
             "return" _ e:boxed_expr() { Expr::Return(e) }
@@ -125,8 +124,7 @@ peg::parser! {
             { Abstraction { variables: vs, expr: e } }
 
         rule variable() -> String
-            = "_" { "*".into() }
-            / v:$(['a'..='z' | 'A'..='Z'] ['a'..='z' | 'A'..='Z' | '0'..='9']*)
+            = v:$(['a'..='z' | 'A'..='Z'] ['a'..='z' | 'A'..='Z' | '0'..='9']*)
             { v.into() }
 
         rule scoped() -> Scoped
@@ -134,24 +132,29 @@ peg::parser! {
             _ "(" _ es:optional_delimited(<expr()>, <";">) _ e:boxed_expr() ")"
             { Scoped { decls: ds, exprs: es, value_expr: Some(e) } }
             / ds:decls()
-            _ "(" _ es:optional_delimited(<expr()>, <";">) _ ";" _ ")"
+            _ "(" _ es:optional_delimited(<expr()>, <";">) _ ")"
             { Scoped { decls: ds, exprs: es, value_expr: None } }
             / ds:decls()
-            _ "(" _ e:boxed_expr() _ ")"
-            { Scoped { decls: ds, exprs: Vec::new(), value_expr: Some(e)} }
+            _ "(" _ e:boxed_expr()? _ ")"
+            { Scoped { decls: ds, exprs: Vec::new(), value_expr: e} }
+
+        rule record() -> Vec<(String, Expr)>
+            = "{" _ fs:optional_delimited(<v:variable() _ ":" _ e:expr() { (v, e) }>, <",">) _ "}"
+            { fs }
 
         rule decls() -> Vec<(String, Expr)>
-            = "with" _ ds:optional_delimited(<decl()>, <_ "," _>) { ds }
+            = "with"
+            _ ds:optional_delimited(<v:variable() _ "=" _ e:expr() { (v, e) }>, <",">)
+            { ds }
             / { Vec::new() }
-
-        rule decl() -> (String, Expr)
-            = v:variable() _ "=" _ e:expr() { (v, e) }
 
         rule match() -> Match
             = "match" _ e:boxed_expr() _ cs:(case() ** _)
             { Match { variant: e, cases: cs } }
 
-        rule case() -> (String, String, Expr)
-            = "|" _ t:variable() _ v:variable() _ e:expr() { (t, v, e) }
+        rule case() -> (String, Option<String>, Expr)
+            // TODO multi-binding
+            = "|" _ "{" t:variable() _ v:(":" _ v:variable() { v })? _ "}" _ e:expr()
+            { (t, v, e) }
     }
 }

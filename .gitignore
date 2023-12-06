@@ -1,1 +1,4 @@
 /target
+
+/lang/*.ast.txt
+/lang/*.instr.txt
