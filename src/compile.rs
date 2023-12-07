@@ -124,6 +124,18 @@ impl Compiler {
         None
     }
 
+    fn push_captures(&mut self, reg_index: RegIndex, captures: HashSet<String>) {
+        // assert `reg_index` stores an abstraction
+        for name in captures {
+            let resolved = self
+                .resolve(name.clone(), true)
+                .unwrap_or_else(|| panic!("captured variable {name} is resolved"));
+            let symbol = self.intern(name);
+            self.instrs
+                .push(Instr::StoreField(reg_index, symbol, resolved))
+        }
+    }
+
     // convention: anything below `self.reg_index` is unchanged
     // `self.reg_index` is updated with expr's evaluated value
     // anything above `self.ref_index` is ok to be overwritten
@@ -144,12 +156,15 @@ impl Compiler {
             }
             Expr::Record(rows) => {
                 let mut operands = Vec::new();
+                let saved_description_hint = take(&mut self.description_hint);
                 for (name, expr) in rows {
                     self.reg_index += 1;
+                    self.description_hint = name.clone();
                     self.compile_expr(expr)?;
                     let symbol = self.intern(name);
                     operands.push((symbol, self.reg_index));
                 }
+                self.description_hint = saved_description_hint;
                 self.instrs.push(Instr::LoadRecord(reg_index, operands))
             }
             Expr::Abstraction(abstraction) => {
@@ -168,7 +183,7 @@ impl Compiler {
                 let saved_return_indexes = take(&mut self.return_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
-                self.reg_index = 0;
+                self.reg_index = (arity + 1) as _;
                 self.compile_expr(*abstraction.expr)?;
                 let return_jump_index = self.instrs.len();
                 for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
@@ -188,7 +203,15 @@ impl Compiler {
                     consts: replace(&mut self.consts, saved_consts),
                 };
                 self.chunks.push(chunk);
-                self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
+                self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
+                // if abstraction is in scope body, capturing immediately follows `LoadChunk`
+                // otherwise the capturing is postponed to after all scope declarations and happens
+                // in `Expr::Scope` branch instead of here
+                // a little bit nonlocal logic, also is this a reliable condition?
+                if self.quasi_scope.is_empty() {
+                    let captures = take(&mut self.captures);
+                    self.push_captures(reg_index, captures)
+                }
             }
             Expr::Variable(name) => {
                 let resolved = self.resolve(name.clone(), true).ok_or(CompileError(
@@ -228,19 +251,10 @@ impl Compiler {
                     }
                     self.description_hint = saved_description_hint;
                     for (reg_index, captures) in captures {
-                        // assert `reg_index` stores an abstraction
-                        for name in captures {
-                            let resolved = self
-                                .resolve(name.clone(), true)
-                                .expect("same resolving to closure");
-                            let symbol = self.intern(name);
-                            self.instrs
-                                .push(Instr::StoreField(reg_index, symbol, resolved))
-                        }
+                        self.push_captures(reg_index, captures)
                     }
                     self.captures = saved_captures;
                     take(&mut self.quasi_scope);
-                } else {
                 }
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?

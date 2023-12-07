@@ -5,35 +5,24 @@ with
     some = func() ()
     none = ()
 
-    set_tree = func(self) func(rep)
-        {
-            check: func() match rep.left
-                | {None} rep.item
-                | {Some} rep.item + rep.left.Some.check() + rep.right.Some.check(),
-        }
-    tree = (func() with
-        m = {content: func(rep) {}}
-    (
-        m mut.content set_tree(m)
-        func(item, depth) with
-            rep = (func() match depth > 0
-                | {True} with
-                    item2 = item + item
-                    left = tree(item2 - 1, depth - 1)
-                    right = tree(item2, depth - 1)
-                    ({item: item, depth: depth, left: some(left), right: some(right)})
-                | {False}
-                    {item: item, depth: depth, left: none, right: none}
-            )()
-            (m.content(rep))
-    ))()
+    tree = func(item, depth) match depth > 0
+        | {True} with
+            item2 = item + item
+            left = tree(item2 - 1, depth - 1)
+            right = tree(item2, depth - 1) 
+            ({item: item, depth: depth, left: some(left), right: some(right)})
+        | {False}
+            {item: item, depth: depth, left: none, right: none}
+    check = func(node) match node.left
+        | {None} node.item
+        | {Some} node.item + check(node.left.Some) - check(node.right.Some)
     min_depth = 4
     max_depth = 14
     stretch_depth = max_depth + 1
     start = clock()
 (
     print("stretch tree of depth " + str(stretch_depth))
-    print("check: " + tree(0, stretch_depth).check())
+    print("check: " + check(tree(0, stretch_depth)))
 
 with
     long_lived_tree = tree(0, max_depth)
@@ -53,7 +42,7 @@ with
         i = 1
     (
         loop match i <= iterations | {False} break | {True} (
-            check mut check + tree(i, depth).check() + tree(-i, depth).check()
+            check mut check + check(tree(i, depth)) + check(tree(-i, depth))
             i mut i + 1
         )
 
@@ -66,6 +55,6 @@ with
     )
 
     print("long lived tree of depth: " + str(max_depth))
-    print("check: " + str(long_lived_tree.check()))
+    print("check: " + str(check(long_lived_tree)))
     print("elapsed: " + str(clock() - start))
 )))

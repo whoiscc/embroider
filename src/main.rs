@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
             println!(
                 "line {} col {}",
                 s.lines().count(),
-                s.lines().last().map(|l| l.len()).unwrap_or_default()
+                s.lines().last().unwrap_or_default().len() + 1,
             )
         }
     }
