@@ -134,9 +134,9 @@ impl Compiler {
         None
     }
 
-    fn push_captures(&mut self, reg_index: RegIndex) {
+    fn push_captures(&mut self, reg_index: RegIndex, captures: HashSet<String>) {
         // assert `reg_index` stores an abstraction
-        for name in take(&mut self.captures) {
+        for name in captures {
             let resolved = self
                 .resolve(name.clone(), true)
                 .unwrap_or_else(|| panic!("captured variable {name} is resolved"));
@@ -189,6 +189,7 @@ impl Compiler {
             }
             Expr::Abstraction(abstraction) => {
                 let arity = abstraction.variables.len();
+                let saved_captures = take(&mut self.captures);
                 let saved_scopes = take(&mut self.scopes);
                 let saved_quasi_scope = take(&mut self.quasi_scope);
                 let saved_capture_scopes = self.capture_scopes.clone();
@@ -243,7 +244,10 @@ impl Compiler {
                 // `push_captures` uses `resolve` which may use `self.reg_index`, so adjust it
                 // to a safe position
                 self.reg_index = reg_index + 1;
-                self.push_captures(reg_index);
+                // println!("{} {:?}", chunk_index, self.quasi_scope);
+                // println!("{:?}", self.captures);
+                let captures = replace(&mut self.captures, saved_captures);
+                self.push_captures(reg_index, captures);
                 self.quasi_scope = self.scopes.pop().unwrap()
             }
             Expr::Variable(name) => {
@@ -273,7 +277,6 @@ impl Compiler {
                         .collect()
                 }
                 let saved_postponed_capture_instrs = take(&mut self.postponed_capture_instrs);
-                let saved_captures = take(&mut self.captures);
                 let saved_description_hint = take(&mut self.description_hint);
                 self.scopes.push(Default::default());
                 for (name, expr) in scoped.decls {
@@ -287,7 +290,6 @@ impl Compiler {
                     &mut self.postponed_capture_instrs,
                     saved_postponed_capture_instrs,
                 ));
-                self.captures = saved_captures;
                 self.description_hint = saved_description_hint;
                 if !scopeless {
                     take(&mut self.quasi_scope);

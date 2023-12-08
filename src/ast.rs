@@ -65,9 +65,10 @@ pub struct Match {
 
 peg::parser! {
     pub grammar parse() for str {
-        pub rule boxed_expr() -> Box<ExprO> = e:expr() { Box::new(e) }
+        pub rule program() -> ExprO = e:expr() _ { e }
 
-        pub rule expr() -> ExprO = precedence! {
+        rule boxed_expr() -> Box<ExprO> = e:expr() { Box::new(e) }
+        rule expr() -> ExprO = precedence! {
             p:position!() e:@ _:position!() { (e, p) }
             --
             e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
