@@ -66,7 +66,15 @@ pub struct Compiler {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompileError(pub String, pub usize);
+pub struct CompileError(pub CompileErrorKind, pub usize);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompileErrorKind {
+    ResolveFail(String),
+    ResolveMutFail(String),
+    NestedWith,
+    RegisterExhausted,
+}
 
 impl Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -151,7 +159,7 @@ impl Compiler {
     fn compile_expr(&mut self, expr: ExprO) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
         if reg_index == RegIndex::MAX {
-            Err(CompileError("register exhausted".into(), expr.1))?
+            Err(CompileError(CompileErrorKind::RegisterExhausted, expr.1))?
         }
         let offset = expr.1;
         match expr.0 {
@@ -223,10 +231,9 @@ impl Compiler {
                 self.push_captures(reg_index)
             }
             Expr::Variable(name) => {
-                let resolved = self.resolve(name.clone(), true).ok_or(CompileError(
-                    format!("varaible {name} is not defined"),
-                    offset,
-                ))?;
+                let resolved = self
+                    .resolve(name.clone(), true)
+                    .ok_or(CompileError(CompileErrorKind::ResolveFail(name), offset))?;
                 self.instrs.push(Instr::Move(self.reg_index, resolved))
             }
             Expr::GetField(expr, name) => {
@@ -238,7 +245,7 @@ impl Compiler {
             }
             Expr::Scoped(scoped) => {
                 if !self.quasi_scope.is_empty() && !scoped.decls.is_empty() {
-                    Err(CompileError("nested `with` is not allowed".into(), offset))?
+                    Err(CompileError(CompileErrorKind::NestedWith, offset))?
                 }
                 self.quasi_scope = scoped
                     .decls
@@ -297,10 +304,9 @@ impl Compiler {
             }
             Expr::Mut(name, expr) => {
                 self.compile_expr(*expr)?;
-                let resolved = self.resolve(name.clone(), false).ok_or(CompileError(
-                    format!("cannot find or capture variable {name} for mutation"),
-                    offset,
-                ))?;
+                let resolved = self
+                    .resolve(name.clone(), false)
+                    .ok_or(CompileError(CompileErrorKind::ResolveMutFail(name), offset))?;
                 self.instrs.push(Instr::Move(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
