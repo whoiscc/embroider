@@ -17,13 +17,17 @@ use crate::{
 #[derive(Debug)]
 pub struct Evaluator {
     chunks: Vec<Chunk>,
+    symbols: Vec<String>,
     allocator: Allocator,
 
-    chunk_symbol: Symbol,
     intrinsics: HashMap<ChunkIndex, Intrinsic>,
+    symbol_chunk: Symbol,
+    symbol_true: Symbol,
+    symbol_false: Symbol,
 
     registers: Vec<Value>,
     frames: Vec<Frame>,
+    intrinsic_base_pointer: usize,
 }
 
 type Intrinsic = fn(&mut Evaluator) -> anyhow::Result<()>;
@@ -42,9 +46,10 @@ pub struct EvalError(pub EvalErrorKind, pub ChunkIndex, pub usize);
 pub enum EvalErrorKind {
     TypeError(String, String),
     RecordTypeError(String),
+    RecordKeyError(String),
     ApplyTypeError(String),
-    Operator2TypeError(String, String),
-    Operator1TypeError(String),
+    Operator2TypeError(Operator, String, String),
+    Operator1TypeError(Operator, String),
     ArityError(usize, usize),
 }
 
@@ -66,18 +71,21 @@ impl Error for EvalErrorKind {}
 
 impl Evaluator {
     pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
-        let chunk_symbol = compiler.intern("%chunk".into());
-        let mut lang_chunks = HashMap::<_, Intrinsic>::new();
-        lang_chunks.insert(compiler.lang_indexes["print"], Self::intrinsic_print);
-        lang_chunks.insert(compiler.lang_indexes["clock"], Self::intrinsic_clock);
-        lang_chunks.insert(compiler.lang_indexes["repr"], Self::intrinsic_repr);
+        let mut intrinsics = HashMap::<_, Intrinsic>::new();
+        intrinsics.insert(compiler.lang_indexes["print"], Self::intrinsic_print);
+        intrinsics.insert(compiler.lang_indexes["clock"], Self::intrinsic_clock);
+        intrinsics.insert(compiler.lang_indexes["repr"], Self::intrinsic_repr);
         Self {
-            chunks: compiler.chunks,
             allocator,
-            chunk_symbol,
-            intrinsics: lang_chunks,
+            symbol_chunk: compiler.intern("%chunk".into()),
+            symbol_true: compiler.intern("True".into()),
+            symbol_false: compiler.intern("False".into()),
+            chunks: compiler.chunks,
+            symbols: compiler.symbols,
+            intrinsics,
             registers: Default::default(),
             frames: Default::default(),
+            intrinsic_base_pointer: 0,
         }
     }
 }
@@ -133,6 +141,7 @@ impl Evaluator {
 
             let mut r = I(&mut self.registers, frame.base_pointer);
             let err = |kind| Err(EvalError(kind, frame.chunk_index, frame.instr_pointer - 1));
+            // println!("{instr:?}");
             match instr {
                 Instr::LoadUnit(i) => r[i] = Value::Unit,
                 Instr::LoadConst(i, const_index) => {
@@ -150,26 +159,27 @@ impl Evaluator {
                 }
                 Instr::LoadChunk(i, chunk_index) => {
                     let mut record = HashMap::new();
-                    record.insert(self.chunk_symbol, Value::ChunkIndex(*chunk_index));
+                    record.insert(self.symbol_chunk, Value::ChunkIndex(*chunk_index));
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
                 Instr::LoadField(i, j, symbol) => {
                     let Some(record) = r[j].downcast_ref::<Record>() else {
                         err(EvalErrorKind::RecordTypeError(r[j].type_name().into()))?
                     };
-                    r[i] = record[symbol].clone()
+                    if let Some(value) = record.get(symbol) {
+                        r[i] = value.clone()
+                    } else {
+                        err(EvalErrorKind::RecordKeyError(self.symbols[*symbol].clone()))?
+                    }
                 }
                 Instr::StoreField(i, symbol, j) => {
                     let value = r[j].clone();
                     let Some(record) = r[i].downcast_mut::<Record>() else {
                         err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     };
-                    if record.contains_key(&self.chunk_symbol) {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
-                    }
                     record.insert(*symbol, value);
                 }
-                Instr::Move(i, j) => r[j] = r[i].clone(),
+                Instr::Move(i, j) => r[i] = r[j].clone(),
                 Instr::Operator(i, op, xs) => {
                     r[i] = if xs.len() == 2 {
                         match (op, &r[&xs[0]], &r[&xs[1]]) {
@@ -178,6 +188,12 @@ impl Evaluator {
                             (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(*a * *b),
                             (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(*a / *b),
                             (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(*a % *b),
+                            (Operator::Eq, Value::I32(a), Value::I32(b)) => Value::Bool(*a == *b),
+                            (Operator::Ne, Value::I32(a), Value::I32(b)) => Value::Bool(*a != *b),
+                            (Operator::Lt, Value::I32(a), Value::I32(b)) => Value::Bool(*a < *b),
+                            (Operator::Gt, Value::I32(a), Value::I32(b)) => Value::Bool(*a > *b),
+                            (Operator::Le, Value::I32(a), Value::I32(b)) => Value::Bool(*a <= *b),
+                            (Operator::Ge, Value::I32(a), Value::I32(b)) => Value::Bool(*a >= *b),
                             (Operator::Add, Value::F64(a), Value::F64(b)) => Value::F64(*a + *b),
                             (Operator::Sub, Value::F64(a), Value::F64(b)) => Value::F64(*a - *b),
                             (Operator::Mul, Value::F64(a), Value::F64(b)) => Value::F64(*a * *b),
@@ -190,12 +206,14 @@ impl Evaluator {
                                     Value::Dyn(self.allocator.alloc([&**a, &**b].concat()))
                                 } else {
                                     err(EvalErrorKind::Operator2TypeError(
+                                        *op,
                                         r[&xs[0]].type_name().into(),
                                         r[&xs[1]].type_name().into(),
                                     ))?
                                 }
                             }
                             _ => err(EvalErrorKind::Operator2TypeError(
+                                *op,
                                 r[&xs[0]].type_name().into(),
                                 r[&xs[1]].type_name().into(),
                             ))?,
@@ -204,6 +222,7 @@ impl Evaluator {
                         match (op, &r[&xs[0]]) {
                             (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
                             _ => err(EvalErrorKind::Operator1TypeError(
+                                *op,
                                 r[&xs[0]].type_name().into(),
                             ))?,
                         }
@@ -215,7 +234,7 @@ impl Evaluator {
                     let Some(record) = r[i].downcast_ref::<Record>() else {
                         err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
                     };
-                    let Some(Value::ChunkIndex(chunk_index)) = record.get(&self.chunk_symbol)
+                    let Some(Value::ChunkIndex(chunk_index)) = record.get(&self.symbol_chunk)
                     else {
                         err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
                     };
@@ -226,41 +245,50 @@ impl Evaluator {
                         ))?
                     }
                     if let Some(intrinsic) = self.intrinsics.get(chunk_index) {
+                        self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
                         intrinsic(self)?
                     } else {
                         let frame = Frame {
                             chunk_index: *chunk_index,
-                            base_pointer: *i as _,
+                            base_pointer: frame.base_pointer + *i as usize,
                             instr_pointer: 0,
                         };
+                        // println!("{frame:?}");
                         self.frames.push(frame)
                     }
                 }
                 Instr::MatchField(i, symbol, instr) => {
-                    let Some(record) = r[i].downcast_ref::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
+                    let matched = if let Value::Bool(b) = r[i] {
+                        if b {
+                            *symbol == self.symbol_true
+                        } else {
+                            *symbol == self.symbol_false
+                        }
+                    } else {
+                        let Some(record) = r[i].downcast_ref::<Record>() else {
+                            err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
+                        };
+                        if record.contains_key(&self.symbol_chunk) {
+                            err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
+                        }
+                        record.contains_key(symbol)
                     };
-                    if record.contains_key(&self.chunk_symbol) {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
-                    }
-                    if !record.contains_key(symbol) {
+                    if !matched {
                         frame.instr_pointer = *instr
                     }
                 }
                 Instr::Jump(instr) => frame.instr_pointer = *instr,
             }
+            // println!("{:?}", self.registers);
         }
         Ok(())
     }
 
     fn intrinsic_print(&mut self) -> anyhow::Result<()> {
-        let mut r = I(
-            &mut self.registers,
-            self.frames.last().unwrap().base_pointer,
-        );
-        let Some(s) = r[0].downcast_ref::<String>() else {
+        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
+        let Some(s) = r[1].downcast_ref::<String>() else {
             Err(EvalErrorKind::TypeError(
-                r[0].type_name().into(),
+                r[1].type_name().into(),
                 "String".into(),
             ))?
         };
@@ -270,21 +298,17 @@ impl Evaluator {
     }
 
     fn intrinsic_clock(&mut self) -> anyhow::Result<()> {
-        let mut r = I(
-            &mut self.registers,
-            self.frames.last().unwrap().base_pointer,
-        );
+        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
         r[0] = Value::F64(UNIX_EPOCH.elapsed().unwrap().as_secs_f64());
         Ok(())
     }
 
     fn intrinsic_repr(&mut self) -> anyhow::Result<()> {
-        let mut r = I(
-            &mut self.registers,
-            self.frames.last().unwrap().base_pointer,
-        );
-        let repr = format!("{:?}", r[0]);
+        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
+        let repr = format!("{:?}", r[1]);
         r[0] = Value::Dyn(self.allocator.alloc(repr));
+        // println!("{:?}", r[0]);
+        // println!("{}", r[0].type_name());
         Ok(())
     }
 }

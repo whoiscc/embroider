@@ -53,6 +53,7 @@ pub enum Value {
     ChunkIndex(usize),
     // extension for common efficiency
     Unit,
+    Bool(bool),
     I32(i32),
     U64(u64),
     F64(f64),
@@ -65,6 +66,7 @@ impl Value {
             Self::Dyn(addr) => addr.access_shared().type_name(),
             Self::ChunkIndex(_) => "(Chunk)",
             Self::Unit => "Unit",
+            Self::Bool(_) => "Bool",
             Self::I32(_) => "I32",
             Self::U64(_) => "U64",
             Self::F64(_) => "F64",

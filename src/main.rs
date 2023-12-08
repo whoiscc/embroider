@@ -6,6 +6,8 @@ pub mod eval;
 pub mod gc;
 pub mod value;
 
+use gc::Allocator;
+
 pub use crate::compile::Compiler;
 pub use crate::eval::Evaluator;
 pub use crate::value::Value;
@@ -33,10 +35,11 @@ fn main() -> anyhow::Result<()> {
             )
         }
     }
-    result?;
+    let chunk_index = result?;
     let mut instr_out = File::create(path.with_extension("instr.txt"))?;
     for chunk_index in 0..compiler.chunks.len() {
         writeln!(instr_out, "{}", compiler.disassemble(chunk_index))?
     }
-    Ok(())
+    let mut evaluator = Evaluator::new(compiler, Allocator::default());
+    evaluator.eval_chunk(chunk_index)
 }

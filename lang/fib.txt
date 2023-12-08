@@ -8,6 +8,13 @@ with
         | {False} fib(n - 2) + fib(n - 1)
     start = clock()
 (
+    print(repr(fib(10)))
     print(repr(fib(35) == 9227465))
     print(repr(clock() - start))
+# with
+#     start = clock()
+# (
+#     print(repr(fib(40)))
+#     print(repr(clock() - start))
+# )
 )

@@ -109,7 +109,7 @@ peg::parser! {
             e:variable() { Expr::Variable(e) }
         }
 
-        rule _ = quiet!{[' ' | '\n']*}
+        rule _ = quiet!{(" " / "\n" / ("#" [^'\n']*))*}
 
         rule optional_delimited<T>(r: rule<T>, delim: rule<()>) -> Vec<T>
             = x:r() _ xs:(delim()? _ x:r() { x })* delim()?

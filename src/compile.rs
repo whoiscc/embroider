@@ -49,7 +49,7 @@ pub struct Chunk {
 pub struct Compiler {
     pub chunks: Vec<Chunk>,
     pub lang_indexes: HashMap<String, ChunkIndex>,
-    symbols: Vec<String>,
+    pub symbols: Vec<String>,
     symbol_indexes: HashMap<String, Symbol>,
 
     instrs: Vec<Instr>,
