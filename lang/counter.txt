@@ -1,0 +1,40 @@
+with
+    print = func() ()
+    str = func() ()
+
+    set_counter_class = func(self) func(rep) {
+        get: func() rep.x
+        set: func(i) rep mut.x i
+        inc: func() self.class(rep).set(self.class(rep).get() + 1)
+    }
+    set_counter = (func() with
+        m = {class: func(rep) {}}
+        m_class = set_counter_class(m)
+    (
+        m mut.class m_class
+        func() m_class({x: 1})
+    ))()
+    instr_counter_class = func(self) func(rep) with
+        super = set_counter_class(self)
+    ({
+        get: super(rep).get
+        set: func(i) (
+            rep mut.a rep.a + 1
+            super(rep).set(i)
+        )
+        inc: super(rep).inc
+        accesses: func() rep.a
+    })
+    instr_counter = (func() with 
+        m = {class: func(rep) {}}
+        m_class = instr_counter_class(m)
+    (
+        m mut.class m_class
+        func() m_class({x: 1, a: 0})
+    ))()
+    ic = instr_counter()
+(
+    ic.inc()
+    print(str(ic.get()))
+    print(str(ic.accesses()))
+)

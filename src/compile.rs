@@ -52,6 +52,7 @@ pub struct Compiler {
     symbol_indexes: HashMap<String, Symbol>,
 
     instrs: Vec<Instr>,
+    postponed_capture_instrs: Vec<Instr>,
     consts: Vec<Const>,
     reg_index: RegIndex,
     scopes: Vec<HashMap<String, RegIndex>>,
@@ -124,15 +125,22 @@ impl Compiler {
         None
     }
 
-    fn push_captures(&mut self, reg_index: RegIndex, captures: HashSet<String>) {
+    fn push_captures(&mut self, reg_index: RegIndex) {
         // assert `reg_index` stores an abstraction
-        for name in captures {
+        for name in take(&mut self.captures) {
             let resolved = self
                 .resolve(name.clone(), true)
                 .unwrap_or_else(|| panic!("captured variable {name} is resolved"));
             let symbol = self.intern(name);
-            self.instrs
-                .push(Instr::StoreField(reg_index, symbol, resolved))
+            // if abstraction is in scope body, capturing immediately happens
+            // otherwise the capturing is postponed to after all scope declarations
+            // is this branch condition always correct?
+            if self.quasi_scope.is_empty() {
+                &mut self.instrs
+            } else {
+                &mut self.postponed_capture_instrs
+            }
+            .push(Instr::StoreField(reg_index, symbol, resolved))
         }
     }
 
@@ -142,6 +150,9 @@ impl Compiler {
     // return, break and continue does not follow this convention
     fn compile_expr(&mut self, expr: ExprO) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
+        if reg_index == RegIndex::MAX {
+            Err(CompileError("register exhausted".into(), expr.1))?
+        }
         let offset = expr.1;
         match expr.0 {
             Expr::Integer(integer) => {
@@ -175,16 +186,18 @@ impl Compiler {
                 self.capture_scopes.extend(saved_scopes.clone());
                 self.capture_scopes.push(saved_quasi_scope.clone());
                 let mut scope = HashMap::new();
-                for (i, name) in abstraction.variables.into_iter().enumerate() {
-                    // reserve register 0 for capturing record
-                    scope.insert(name, i as RegIndex + 1);
+                let mut i = 1; // reserve register 0 for capturing record
+                for name in abstraction.variables {
+                    scope.insert(name, i);
+                    i += 1
                 }
                 self.scopes.push(scope);
                 let saved_return_indexes = take(&mut self.return_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
-                self.reg_index = (arity + 1) as _;
+                self.reg_index = i;
                 self.compile_expr(*abstraction.expr)?;
+                self.instrs.push(Instr::Move(0, i));
                 let return_jump_index = self.instrs.len();
                 for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
                     let Instr::Jump(index) = &mut self.instrs[return_index] else {
@@ -204,14 +217,10 @@ impl Compiler {
                 };
                 self.chunks.push(chunk);
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
-                // if abstraction is in scope body, capturing immediately follows `LoadChunk`
-                // otherwise the capturing is postponed to after all scope declarations and happens
-                // in `Expr::Scope` branch instead of here
-                // a little bit nonlocal logic, also is this a reliable condition?
-                if self.quasi_scope.is_empty() {
-                    let captures = take(&mut self.captures);
-                    self.push_captures(reg_index, captures)
-                }
+                // `push_captures` uses `resolve` which may use `self.reg_index`, so adjust it
+                // to a safe position
+                self.reg_index = reg_index + 1;
+                self.push_captures(reg_index)
             }
             Expr::Variable(name) => {
                 let resolved = self.resolve(name.clone(), true).ok_or(CompileError(
@@ -228,34 +237,32 @@ impl Compiler {
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                self.scopes.push(Default::default());
-                if !scoped.decls.is_empty() {
-                    if !self.quasi_scope.is_empty() {
-                        Err(CompileError("nested `with` is not allowed".into(), offset))?
-                    }
-                    self.quasi_scope = scoped
-                        .decls
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
-                        .collect();
-                    let mut captures = HashMap::new();
-                    let saved_captures = take(&mut self.captures);
-                    let saved_description_hint = take(&mut self.description_hint);
-                    for (name, expr) in scoped.decls {
-                        self.description_hint = name.clone();
-                        self.compile_expr(expr)?;
-                        self.scopes.last_mut().unwrap().insert(name, self.reg_index);
-                        captures.insert(self.reg_index, take(&mut self.captures));
-                        self.reg_index += 1
-                    }
-                    self.description_hint = saved_description_hint;
-                    for (reg_index, captures) in captures {
-                        self.push_captures(reg_index, captures)
-                    }
-                    self.captures = saved_captures;
-                    take(&mut self.quasi_scope);
+                if !self.quasi_scope.is_empty() && !scoped.decls.is_empty() {
+                    Err(CompileError("nested `with` is not allowed".into(), offset))?
                 }
+                self.quasi_scope = scoped
+                    .decls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
+                    .collect();
+                let saved_postponed_capture_instrs = take(&mut self.postponed_capture_instrs);
+                let saved_captures = take(&mut self.captures);
+                let saved_description_hint = take(&mut self.description_hint);
+                self.scopes.push(Default::default());
+                for (name, expr) in scoped.decls {
+                    self.description_hint = name.clone();
+                    self.compile_expr(expr)?;
+                    self.scopes.last_mut().unwrap().insert(name, self.reg_index);
+                    self.reg_index += 1
+                }
+                self.instrs.extend(replace(
+                    &mut self.postponed_capture_instrs,
+                    saved_postponed_capture_instrs,
+                ));
+                self.captures = saved_captures;
+                self.description_hint = saved_description_hint;
+                take(&mut self.quasi_scope);
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
                 }
@@ -397,6 +404,28 @@ impl Display for DisassembleChunk<'_> {
         writeln!(f, "chunk {} {}", self.chunk_index, chunk.description)?;
         for (index, instr) in chunk.instrs.iter().enumerate() {
             write!(f, "  {index:>4} {instr:?}")?;
+            match instr {
+                Instr::LoadConst(_, index) => write!(f, " {:?}", chunk.consts[*index])?,
+                Instr::LoadField(_, _, symbol) => write!(f, " {}", self.compiler.symbols[*symbol])?,
+                Instr::LoadChunk(_, index) => {
+                    write!(f, " {}", self.compiler.chunks[*index].description)?
+                }
+                Instr::StoreField(_, symbol, _) => {
+                    write!(f, " {}", self.compiler.symbols[*symbol])?
+                }
+                Instr::MatchField(_, symbol, _) => {
+                    write!(f, " {}", self.compiler.symbols[*symbol])?
+                }
+                Instr::LoadRecord(_, rows) => write!(
+                    f,
+                    " {}",
+                    rows.iter()
+                        .map(|(symbol, _)| &*self.compiler.symbols[*symbol])
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )?,
+                _ => {}
+            }
             if index != chunk.instrs.len() - 1 {
                 writeln!(f)?
             }

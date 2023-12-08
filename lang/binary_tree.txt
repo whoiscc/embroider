@@ -5,16 +5,16 @@ with
     some = func() ()
     none = ()
 
-    set_tree = func(self) func(rep)
-        {
-            check: func() match rep.left
-                | {None} rep.item
-                | {Some} rep.item + rep.left.Some.check() + rep.right.Some.check(),
-        }
+    tree_class = func(self) func(rep) {
+        check: func() match rep.left
+            | {None} rep.item
+            | {Some} rep.item + rep.left.Some.check() + rep.right.Some.check()
+    }
     tree = (func() with
-        m = {content: func(rep) {}}
+        m = {class: func(rep) {}}
+        m_class = tree_class(m)
     (
-        m mut.content set_tree(m)
+        m mut.class m_class
         func(item, depth) with
             rep = (func() match depth > 0
                 | {True} with
@@ -25,7 +25,7 @@ with
                 | {False}
                     {item: item, depth: depth, left: none, right: none}
             )()
-            (m.content(rep))
+            (m_class(rep))
     ))()
     min_depth = 4
     max_depth = 14
