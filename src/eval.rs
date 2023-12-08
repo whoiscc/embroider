@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     collections::HashMap,
     error::Error,
     fmt::Display,
@@ -10,33 +9,10 @@ use std::{
 use crate::{
     ast::Operator,
     compile::{Chunk, ChunkIndex, Compiler, Const, Instr, RegIndex, Symbol},
-    gc::{Addr, Allocator},
+    gc::Allocator,
+    value::Record,
+    Value,
 };
-
-// both underlying (Rust) type and lifetime are dynamical
-pub type Dyn = Box<dyn Any + Send + Sync>;
-
-pub type Record = HashMap<Symbol, Value>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Invalid,
-    // universal representation
-    Dyn(Addr),
-    // extension to support representing closures with records
-    ChunkIndex(usize),
-    // extension for common efficiency
-    Unit,
-    I32(i32),
-    U64(u64),
-    F64(f64),
-}
-
-impl Value {
-    fn type_name(&self) -> String {
-        format!("{self:?}")
-    }
-}
 
 #[derive(Debug)]
 pub struct Evaluator {
@@ -178,24 +154,18 @@ impl Evaluator {
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
                 Instr::LoadField(i, j, symbol) => {
-                    let Value::Dyn(addr) = &r[j] else {
-                        err(EvalErrorKind::RecordTypeError(r[j].type_name()))?
-                    };
-                    let Some(record) = addr.as_ref().downcast_ref::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[j].type_name()))?
+                    let Some(record) = r[j].downcast_ref::<Record>() else {
+                        err(EvalErrorKind::RecordTypeError(r[j].type_name().into()))?
                     };
                     r[i] = record[symbol].clone()
                 }
                 Instr::StoreField(i, symbol, j) => {
                     let value = r[j].clone();
-                    let Value::Dyn(addr) = &mut r[i] else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
-                    };
-                    let Some(record) = addr.as_mut().downcast_mut::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
+                    let Some(record) = r[i].downcast_mut::<Record>() else {
+                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     };
                     if record.contains_key(&self.chunk_symbol) {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
+                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     }
                     record.insert(*symbol, value);
                 }
@@ -208,43 +178,46 @@ impl Evaluator {
                             (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(*a * *b),
                             (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(*a / *b),
                             (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(*a % *b),
-                            (Operator::Add, Value::Dyn(a), Value::Dyn(b)) => {
-                                if let (Some(a), Some(b)) = (
-                                    a.as_ref().downcast_ref::<String>(),
-                                    b.as_ref().downcast_ref::<String>(),
-                                ) {
+                            (Operator::Add, Value::F64(a), Value::F64(b)) => Value::F64(*a + *b),
+                            (Operator::Sub, Value::F64(a), Value::F64(b)) => Value::F64(*a - *b),
+                            (Operator::Mul, Value::F64(a), Value::F64(b)) => Value::F64(*a * *b),
+                            (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
+                            (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
+                            (Operator::Add, a, b) => {
+                                if let (Some(a), Some(b)) =
+                                    (a.downcast_ref::<String>(), b.downcast_ref::<String>())
+                                {
                                     Value::Dyn(self.allocator.alloc([&**a, &**b].concat()))
                                 } else {
                                     err(EvalErrorKind::Operator2TypeError(
-                                        r[&xs[0]].type_name(),
-                                        r[&xs[1]].type_name(),
+                                        r[&xs[0]].type_name().into(),
+                                        r[&xs[1]].type_name().into(),
                                     ))?
                                 }
                             }
                             _ => err(EvalErrorKind::Operator2TypeError(
-                                r[&xs[0]].type_name(),
-                                r[&xs[1]].type_name(),
+                                r[&xs[0]].type_name().into(),
+                                r[&xs[1]].type_name().into(),
                             ))?,
                         }
                     } else if xs.len() == 1 {
                         match (op, &r[&xs[0]]) {
                             (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
-                            _ => err(EvalErrorKind::Operator1TypeError(r[&xs[0]].type_name()))?,
+                            _ => err(EvalErrorKind::Operator1TypeError(
+                                r[&xs[0]].type_name().into(),
+                            ))?,
                         }
                     } else {
                         unreachable!()
                     }
                 }
                 Instr::Apply(i, arity) => {
-                    let Value::Dyn(addr) = r[i] else {
-                        err(EvalErrorKind::ApplyTypeError(r[i].type_name()))?
-                    };
-                    let Some(record) = addr.as_ref().downcast_ref::<Record>() else {
-                        err(EvalErrorKind::ApplyTypeError(r[i].type_name()))?
+                    let Some(record) = r[i].downcast_ref::<Record>() else {
+                        err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
                     };
                     let Some(Value::ChunkIndex(chunk_index)) = record.get(&self.chunk_symbol)
                     else {
-                        err(EvalErrorKind::ApplyTypeError(r[i].type_name()))?
+                        err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
                     };
                     if *arity != self.chunks[*chunk_index].arity {
                         err(EvalErrorKind::ArityError(
@@ -264,14 +237,11 @@ impl Evaluator {
                     }
                 }
                 Instr::MatchField(i, symbol, instr) => {
-                    let Value::Dyn(addr) = r[i] else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
-                    };
-                    let Some(record) = addr.as_ref().downcast_ref::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
+                    let Some(record) = r[i].downcast_ref::<Record>() else {
+                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     };
                     if record.contains_key(&self.chunk_symbol) {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
+                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     }
                     if !record.contains_key(symbol) {
                         frame.instr_pointer = *instr
@@ -288,11 +258,11 @@ impl Evaluator {
             &mut self.registers,
             self.frames.last().unwrap().base_pointer,
         );
-        let Value::Dyn(addr) = r[0] else {
-            Err(EvalErrorKind::TypeError(r[0].type_name(), "String".into()))?
-        };
-        let Some(s) = addr.as_ref().downcast_ref::<String>() else {
-            Err(EvalErrorKind::TypeError(r[0].type_name(), "String".into()))?
+        let Some(s) = r[0].downcast_ref::<String>() else {
+            Err(EvalErrorKind::TypeError(
+                r[0].type_name().into(),
+                "String".into(),
+            ))?
         };
         println!("{s}");
         r[0] = Value::Unit;
@@ -314,8 +284,7 @@ impl Evaluator {
             self.frames.last().unwrap().base_pointer,
         );
         let repr = format!("{:?}", r[0]);
-        let addr = self.allocator.alloc(repr);
-        r[0] = Value::Dyn(addr);
+        r[0] = Value::Dyn(self.allocator.alloc(repr));
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
-use std::{any::Any, ptr::null_mut};
+use std::ptr::null_mut;
 
-use crate::eval::Dyn;
+use crate::value::{ValueType, ValueTypeExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Addr(*mut Object);
@@ -8,9 +8,12 @@ pub struct Addr(*mut Object);
 unsafe impl Send for Addr {}
 unsafe impl Sync for Addr {}
 
-#[derive(Debug)]
+// both underlying (Rust) type and lifetime are dynamical
+type Dyn = Box<dyn ValueTypeExt>;
+
 struct Object {
     content: Dyn,
+    #[allow(unused)]
     link: *mut Object,
 }
 
@@ -26,7 +29,7 @@ impl Default for Allocator {
 }
 
 impl Allocator {
-    pub fn alloc(&mut self, content: impl Any + Send + Sync + 'static) -> Addr {
+    pub fn alloc(&mut self, content: impl ValueType) -> Addr {
         let object = Box::new(Object {
             content: Box::new(content),
             link: self.link,
@@ -37,14 +40,12 @@ impl Allocator {
     }
 }
 
-impl AsRef<Dyn> for Addr {
-    fn as_ref(&self) -> &Dyn {
-        &unsafe { &*self.0 }.content
+impl Addr {
+    pub fn access_shared(&self) -> &dyn ValueTypeExt {
+        &*unsafe { &*self.0 }.content
     }
-}
 
-impl AsMut<Dyn> for Addr {
-    fn as_mut(&mut self) -> &mut Dyn {
-        &mut unsafe { &mut *self.0 }.content
+    pub fn access_exclusive(&mut self) -> &mut dyn ValueTypeExt {
+        &mut *unsafe { &mut *self.0 }.content
     }
 }
