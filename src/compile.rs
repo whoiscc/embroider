@@ -33,7 +33,7 @@ pub enum Instr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Const {
-    Integer(u64),
+    I32(i32),
     String(String),
 }
 
@@ -77,7 +77,7 @@ impl Display for CompileError {
 impl Error for CompileError {}
 
 impl Compiler {
-    fn intern(&mut self, symbol: String) -> Symbol {
+    pub fn intern(&mut self, symbol: String) -> Symbol {
         *self
             .symbol_indexes
             .entry(symbol.clone())
@@ -158,7 +158,7 @@ impl Compiler {
             Expr::Integer(integer) => {
                 self.instrs
                     .push(Instr::LoadConst(reg_index, self.consts.len()));
-                self.consts.push(Const::Integer(integer))
+                self.consts.push(Const::I32(integer))
             }
             Expr::String(string) => {
                 self.instrs
@@ -275,6 +275,7 @@ impl Compiler {
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
             Expr::Operator(op, exprs) => {
+                // TODO and or
                 for expr in exprs {
                     self.compile_expr(expr)?;
                     self.reg_index += 1
@@ -406,10 +407,10 @@ impl Display for DisassembleChunk<'_> {
             write!(f, "  {index:>4} {instr:?}")?;
             match instr {
                 Instr::LoadConst(_, index) => write!(f, " {:?}", chunk.consts[*index])?,
-                Instr::LoadField(_, _, symbol) => write!(f, " {}", self.compiler.symbols[*symbol])?,
                 Instr::LoadChunk(_, index) => {
                     write!(f, " {}", self.compiler.chunks[*index].description)?
                 }
+                Instr::LoadField(_, _, symbol) => write!(f, " {}", self.compiler.symbols[*symbol])?,
                 Instr::StoreField(_, symbol, _) => {
                     write!(f, " {}", self.compiler.symbols[*symbol])?
                 }

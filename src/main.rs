@@ -1,11 +1,11 @@
 use std::{fs::File, io::Write, path::Path};
 
-use compile::CompileError;
-
-use crate::compile::Compiler;
-
 pub mod ast;
 pub mod compile;
+pub mod eval;
+pub mod gc;
+
+use crate::compile::{CompileError, Compiler};
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args()

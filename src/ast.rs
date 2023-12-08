@@ -2,7 +2,7 @@ pub type ExprO = (Expr, usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Integer(u64),
+    Integer(i32),
     String(String),
     Record(Vec<(String, ExprO)>),
     Abstraction(Abstraction),
@@ -48,7 +48,6 @@ pub enum Operator {
     Neg,
     And,
     Or,
-    Not,
     Eq,
     Ne,
     Lt,
@@ -91,7 +90,6 @@ peg::parser! {
             e:(@) _ "<" _ x:@ { Expr::Operator(Operator::Lt, vec![e, x]) }
             e:(@) _ ">" _ x:@ { Expr::Operator(Operator::Gt, vec![e, x]) }
             --
-            "not" _ e:@ { Expr::Operator(Operator::Not, vec![e]) }
             "-" _ e:@ { Expr::Operator(Operator::Neg, vec![e]) }
             --
             e:@ "." v:variable() { Expr::GetField(Box::new(e), v) }
@@ -117,8 +115,8 @@ peg::parser! {
             { let mut xs = xs; xs.insert(0, x); xs }
             / { Vec::new() }
 
-        rule integer() -> u64
-            = n:$(['0'..='9']+) {? n.parse().or(Err("invalid u64 liternal")) }
+        rule integer() -> i32
+            = n:$(['0'..='9']+) {? n.parse().or(Err("invalid i32 liternal")) }
 
         rule string() -> String
             = "\"" n:$([^'"']*) "\"" { n.into() }
