@@ -28,6 +28,7 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Abstraction {
     pub variables: Vec<String>,
+    pub lang: Option<String>,
     pub expr: Box<ExprO>,
 }
 
@@ -124,8 +125,9 @@ peg::parser! {
         rule abstraction() -> Abstraction
             = "func"
             _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
+            _ l:("lang" _ l:variable() { l })?
             _ e:boxed_expr()
-            { Abstraction { variables: vs, expr: e } }
+            { Abstraction { variables: vs, lang: l, expr: e } }
 
         rule variable() -> String
             = v:$(['a'..='z' | 'A'..='Z' | '_'] ['a'..='z' | 'A'..='Z' | '_' | '0'..='9']*)

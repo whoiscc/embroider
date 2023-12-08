@@ -1,6 +1,6 @@
 with
-    print = func(a) ()
-    repr = func(a) ()
+    print = func(a) lang print ()
+    repr = func(a) lang repr ()
 
     seal = func(class, new) with
         m = {self: ()}

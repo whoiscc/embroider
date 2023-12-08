@@ -18,9 +18,8 @@ pub type Dyn = Box<dyn Any + Send + Sync>;
 
 pub type Record = HashMap<Symbol, Value>;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    #[default]
     Invalid,
     // universal representation
     Dyn(Addr),
@@ -45,10 +44,13 @@ pub struct Evaluator {
     allocator: Allocator,
 
     chunk_symbol: Symbol,
+    intrinsics: HashMap<ChunkIndex, Intrinsic>,
 
     registers: Vec<Value>,
     frames: Vec<Frame>,
 }
+
+type Intrinsic = fn(&mut Evaluator) -> anyhow::Result<()>;
 
 #[derive(Debug)]
 struct Frame {
@@ -89,10 +91,15 @@ impl Error for EvalErrorKind {}
 impl Evaluator {
     pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
         let chunk_symbol = compiler.intern("%chunk".into());
+        let mut lang_chunks = HashMap::<_, Intrinsic>::new();
+        lang_chunks.insert(compiler.lang_indexes["print"], Self::intrinsic_print);
+        lang_chunks.insert(compiler.lang_indexes["clock"], Self::intrinsic_clock);
+        lang_chunks.insert(compiler.lang_indexes["repr"], Self::intrinsic_repr);
         Self {
             chunks: compiler.chunks,
             allocator,
             chunk_symbol,
+            intrinsics: lang_chunks,
             registers: Default::default(),
             frames: Default::default(),
         }
@@ -112,7 +119,7 @@ impl IndexMut<RegIndex> for I<'_> {
     fn index_mut(&mut self, index: RegIndex) -> &mut Self::Output {
         let offset = self.1 + index as usize;
         if self.0.len() <= offset {
-            self.0.resize(offset + 1, Default::default())
+            self.0.resize(offset + 1, Value::Invalid)
         }
         &mut self.0[offset]
     }
@@ -245,12 +252,16 @@ impl Evaluator {
                             self.chunks[*chunk_index].arity,
                         ))?
                     }
-                    let frame = Frame {
-                        chunk_index: *chunk_index,
-                        base_pointer: *i as _,
-                        instr_pointer: 0,
-                    };
-                    self.frames.push(frame)
+                    if let Some(intrinsic) = self.intrinsics.get(chunk_index) {
+                        intrinsic(self)?
+                    } else {
+                        let frame = Frame {
+                            chunk_index: *chunk_index,
+                            base_pointer: *i as _,
+                            instr_pointer: 0,
+                        };
+                        self.frames.push(frame)
+                    }
                 }
                 Instr::MatchField(i, symbol, instr) => {
                     let Value::Dyn(addr) = r[i] else {

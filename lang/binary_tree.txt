@@ -1,7 +1,7 @@
 with
-    print = func(a) ()
-    clock = func() ()
-    repr = func(a) ()
+    print = func(a) lang print ()
+    clock = func() lang clock ()
+    repr = func(a) lang repr ()
     some = func(value) {Some: value}
     none = {None: ()}
 

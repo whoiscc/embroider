@@ -48,6 +48,7 @@ pub struct Chunk {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Compiler {
     pub chunks: Vec<Chunk>,
+    pub lang_indexes: HashMap<String, ChunkIndex>,
     symbols: Vec<String>,
     symbol_indexes: HashMap<String, Symbol>,
 
@@ -222,6 +223,9 @@ impl Compiler {
                     consts: replace(&mut self.consts, saved_consts),
                 };
                 self.chunks.push(chunk);
+                if let Some(lang) = abstraction.lang {
+                    self.lang_indexes.insert(lang, chunk_index);
+                }
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
                 // reset scopes to prepare for resolving during `push_captures`
                 // the quasi-scope is temporarily pushed in to scopes, to enable correct resolving

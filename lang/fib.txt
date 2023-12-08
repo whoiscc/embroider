@@ -1,12 +1,13 @@
 with
-    print = func() ()
-    clock = func() ()
-    str = func() ()
+    print = func(a) lang print ()
+    clock = func() lang clock ()
+    repr = func(a) lang repr ()
+
     fib = func(n) match n < 2
         | {True} n
         | {False} fib(n - 2) + fib(n - 1)
     start = clock()
 (
-    print(str(fib(35) == 9227465))
-    print(str(clock() - start))
+    print(repr(fib(35) == 9227465))
+    print(repr(clock() - start))
 )
