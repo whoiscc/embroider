@@ -1,9 +1,9 @@
 with
-    print = func() ()
+    print = func(a) ()
     clock = func() ()
-    str = func() ()
-    some = func() ()
-    none = ()
+    repr = func(a) ()
+    some = func(value) {Some: value}
+    none = {None: ()}
 
     tree_class = func(self) func(rep) {
         check: func() match rep.left
@@ -32,7 +32,7 @@ with
     stretch_depth = max_depth + 1
     start = clock()
 (
-    print("stretch tree of depth " + str(stretch_depth))
+    print("stretch tree of depth " + repr(stretch_depth))
     print("check: " + tree(0, stretch_depth).check())
 
 with
@@ -57,15 +57,15 @@ with
             i mut i + 1
         )
 
-        print("num trees: " + str(iterations * 2))
-        print("depth: " + str(depth))
-        print("check: " + str(check))
+        print("num trees: " + repr(iterations * 2))
+        print("depth: " + repr(depth))
+        print("check: " + repr(check))
 
         iterations mut iterations / 4
         depth mut depth + 2
     )
 
-    print("long lived tree of depth: " + str(max_depth))
-    print("check: " + str(long_lived_tree.check()))
-    print("elapsed: " + str(clock() - start))
+    print("long lived tree of depth: " + repr(max_depth))
+    print("check: " + repr(long_lived_tree.check()))
+    print("elapsed: " + repr(clock() - start))
 )))

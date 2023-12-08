@@ -72,7 +72,7 @@ pub struct CompileError(pub CompileErrorKind, pub usize);
 pub enum CompileErrorKind {
     ResolveFail(String),
     ResolveMutFail(String),
-    NestedWith,
+    NestedScoping,
     RegisterExhausted,
 }
 
@@ -204,6 +204,7 @@ impl Compiler {
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
                 self.reg_index = i;
+                // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
                 self.instrs.push(Instr::Move(0, i));
                 let return_jump_index = self.instrs.len();
@@ -213,9 +214,6 @@ impl Compiler {
                     };
                     *index = return_jump_index
                 }
-                self.scopes = saved_scopes;
-                self.quasi_scope = saved_quasi_scope;
-                self.capture_scopes = saved_capture_scopes;
                 let chunk_index = self.chunks.len();
                 let chunk = Chunk {
                     description: self.description_hint.clone(),
@@ -225,10 +223,24 @@ impl Compiler {
                 };
                 self.chunks.push(chunk);
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
+                // reset scopes to prepare for resolving during `push_captures`
+                // the quasi-scope is temporarily pushed in to scopes, to enable correct resolving
+                // the capturing from quasi-scope is postponed to after all scoped declarations, so
+                // even if this captures a variable yet to define, the capturing will only happen
+                // after it is (or will be) defined
+                // previously `push_captures` for scoped-declared abstractions are called while
+                // compiling scope, avoiding this workaround
+                // however at that layer we don't know which part of code is lazy-evaluated and
+                // allows backward-capturing from quasi-scope
+                // so tough
+                self.capture_scopes = saved_capture_scopes;
+                self.scopes = saved_scopes;
+                self.scopes.push(saved_quasi_scope);
                 // `push_captures` uses `resolve` which may use `self.reg_index`, so adjust it
                 // to a safe position
                 self.reg_index = reg_index + 1;
-                self.push_captures(reg_index)
+                self.push_captures(reg_index);
+                self.quasi_scope = self.scopes.pop().unwrap()
             }
             Expr::Variable(name) => {
                 let resolved = self
@@ -244,21 +256,25 @@ impl Compiler {
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                if !self.quasi_scope.is_empty() && !scoped.decls.is_empty() {
-                    Err(CompileError(CompileErrorKind::NestedWith, offset))?
+                let scopeless = scoped.decls.is_empty();
+                if !self.quasi_scope.is_empty() && !scopeless {
+                    Err(CompileError(CompileErrorKind::NestedScoping, offset))?
                 }
-                self.quasi_scope = scoped
-                    .decls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
-                    .collect();
+                if !scopeless {
+                    self.quasi_scope = scoped
+                        .decls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
+                        .collect()
+                }
                 let saved_postponed_capture_instrs = take(&mut self.postponed_capture_instrs);
                 let saved_captures = take(&mut self.captures);
                 let saved_description_hint = take(&mut self.description_hint);
                 self.scopes.push(Default::default());
                 for (name, expr) in scoped.decls {
                     self.description_hint = name.clone();
+                    // println!("before {name}: {:?}", self.quasi_scope);
                     self.compile_expr(expr)?;
                     self.scopes.last_mut().unwrap().insert(name, self.reg_index);
                     self.reg_index += 1
@@ -269,7 +285,9 @@ impl Compiler {
                 ));
                 self.captures = saved_captures;
                 self.description_hint = saved_description_hint;
-                take(&mut self.quasi_scope);
+                if !scopeless {
+                    take(&mut self.quasi_scope);
+                }
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
                 }

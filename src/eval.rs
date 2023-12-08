@@ -4,6 +4,7 @@ use std::{
     error::Error,
     fmt::Display,
     ops::{Index, IndexMut},
+    time::UNIX_EPOCH,
 };
 
 use crate::{
@@ -17,7 +18,7 @@ pub type Dyn = Box<dyn Any + Send + Sync>;
 
 pub type Record = HashMap<Symbol, Value>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Value {
     #[default]
     Invalid,
@@ -29,6 +30,7 @@ pub enum Value {
     Unit,
     I32(i32),
     U64(u64),
+    F64(f64),
 }
 
 impl Value {
@@ -60,6 +62,7 @@ pub struct EvalError(pub EvalErrorKind, pub ChunkIndex, pub usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalErrorKind {
+    TypeError(String, String),
     RecordTypeError(String),
     ApplyTypeError(String),
     Operator2TypeError(String, String),
@@ -75,6 +78,14 @@ impl Display for EvalError {
 
 impl Error for EvalError {}
 
+impl Display for EvalErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl Error for EvalErrorKind {}
+
 impl Evaluator {
     pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
         let chunk_symbol = compiler.intern("%chunk".into());
@@ -86,7 +97,41 @@ impl Evaluator {
             frames: Default::default(),
         }
     }
+}
 
+struct I<'a>(&'a mut Vec<Value>, usize);
+
+impl Index<RegIndex> for I<'_> {
+    type Output = Value;
+    fn index(&self, index: RegIndex) -> &Self::Output {
+        &self.0[self.1 + index as usize]
+    }
+}
+
+impl IndexMut<RegIndex> for I<'_> {
+    fn index_mut(&mut self, index: RegIndex) -> &mut Self::Output {
+        let offset = self.1 + index as usize;
+        if self.0.len() <= offset {
+            self.0.resize(offset + 1, Default::default())
+        }
+        &mut self.0[offset]
+    }
+}
+
+impl Index<&RegIndex> for I<'_> {
+    type Output = <Self as Index<RegIndex>>::Output;
+    fn index(&self, index: &RegIndex) -> &Self::Output {
+        self.index(*index)
+    }
+}
+
+impl IndexMut<&RegIndex> for I<'_> {
+    fn index_mut(&mut self, index: &RegIndex) -> &mut Self::Output {
+        self.index_mut(*index)
+    }
+}
+
+impl Evaluator {
     pub fn eval_chunk(&mut self, chunk_index: usize) -> anyhow::Result<()> {
         let frame = Frame {
             chunk_index,
@@ -102,22 +147,7 @@ impl Evaluator {
                 continue;
             };
             frame.instr_pointer += 1;
-            struct I<'a>(&'a mut Vec<Value>, usize);
-            impl Index<&RegIndex> for I<'_> {
-                type Output = Value;
-                fn index(&self, index: &RegIndex) -> &Self::Output {
-                    &self.0[self.1 + *index as usize]
-                }
-            }
-            impl IndexMut<&RegIndex> for I<'_> {
-                fn index_mut(&mut self, index: &RegIndex) -> &mut Self::Output {
-                    let offset = self.1 + *index as usize;
-                    if self.0.len() <= offset {
-                        self.0.resize(offset + 1, Default::default())
-                    }
-                    &mut self.0[offset]
-                }
-            }
+
             let mut r = I(&mut self.registers, frame.base_pointer);
             let err = |kind| Err(EvalError(kind, frame.chunk_index, frame.instr_pointer - 1));
             match instr {
@@ -131,7 +161,7 @@ impl Evaluator {
                 Instr::LoadRecord(i, rows) => {
                     let record = rows
                         .iter()
-                        .map(|(symbol, i)| (*symbol, r[i]))
+                        .map(|(symbol, i)| (*symbol, r[i].clone()))
                         .collect::<Record>();
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
@@ -147,10 +177,10 @@ impl Evaluator {
                     let Some(record) = addr.as_ref().downcast_ref::<Record>() else {
                         err(EvalErrorKind::RecordTypeError(r[j].type_name()))?
                     };
-                    r[i] = record[symbol]
+                    r[i] = record[symbol].clone()
                 }
                 Instr::StoreField(i, symbol, j) => {
-                    let value = r[j];
+                    let value = r[j].clone();
                     let Value::Dyn(addr) = &mut r[i] else {
                         err(EvalErrorKind::RecordTypeError(r[i].type_name()))?
                     };
@@ -162,15 +192,15 @@ impl Evaluator {
                     }
                     record.insert(*symbol, value);
                 }
-                Instr::Move(i, j) => r[j] = r[i],
+                Instr::Move(i, j) => r[j] = r[i].clone(),
                 Instr::Operator(i, op, xs) => {
                     r[i] = if xs.len() == 2 {
-                        match (op, r[&xs[0]], r[&xs[1]]) {
-                            (Operator::Add, Value::I32(a), Value::I32(b)) => Value::I32(a + b),
-                            (Operator::Sub, Value::I32(a), Value::I32(b)) => Value::I32(a - b),
-                            (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(a * b),
-                            (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(a / b),
-                            (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(a % b),
+                        match (op, &r[&xs[0]], &r[&xs[1]]) {
+                            (Operator::Add, Value::I32(a), Value::I32(b)) => Value::I32(*a + *b),
+                            (Operator::Sub, Value::I32(a), Value::I32(b)) => Value::I32(*a - *b),
+                            (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(*a * *b),
+                            (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(*a / *b),
+                            (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(*a % *b),
                             (Operator::Add, Value::Dyn(a), Value::Dyn(b)) => {
                                 if let (Some(a), Some(b)) = (
                                     a.as_ref().downcast_ref::<String>(),
@@ -190,8 +220,8 @@ impl Evaluator {
                             ))?,
                         }
                     } else if xs.len() == 1 {
-                        match (op, r[&xs[0]]) {
-                            (Operator::Neg, Value::I32(a)) => Value::I32(-a),
+                        match (op, &r[&xs[0]]) {
+                            (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
                             _ => err(EvalErrorKind::Operator1TypeError(r[&xs[0]].type_name()))?,
                         }
                     } else {
@@ -239,6 +269,42 @@ impl Evaluator {
                 Instr::Jump(instr) => frame.instr_pointer = *instr,
             }
         }
+        Ok(())
+    }
+
+    fn intrinsic_print(&mut self) -> anyhow::Result<()> {
+        let mut r = I(
+            &mut self.registers,
+            self.frames.last().unwrap().base_pointer,
+        );
+        let Value::Dyn(addr) = r[0] else {
+            Err(EvalErrorKind::TypeError(r[0].type_name(), "String".into()))?
+        };
+        let Some(s) = addr.as_ref().downcast_ref::<String>() else {
+            Err(EvalErrorKind::TypeError(r[0].type_name(), "String".into()))?
+        };
+        println!("{s}");
+        r[0] = Value::Unit;
+        Ok(())
+    }
+
+    fn intrinsic_clock(&mut self) -> anyhow::Result<()> {
+        let mut r = I(
+            &mut self.registers,
+            self.frames.last().unwrap().base_pointer,
+        );
+        r[0] = Value::F64(UNIX_EPOCH.elapsed().unwrap().as_secs_f64());
+        Ok(())
+    }
+
+    fn intrinsic_repr(&mut self) -> anyhow::Result<()> {
+        let mut r = I(
+            &mut self.registers,
+            self.frames.last().unwrap().base_pointer,
+        );
+        let repr = format!("{:?}", r[0]);
+        let addr = self.allocator.alloc(repr);
+        r[0] = Value::Dyn(addr);
         Ok(())
     }
 }

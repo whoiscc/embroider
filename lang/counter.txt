@@ -1,6 +1,6 @@
 with
-    print = func() ()
-    str = func() ()
+    print = func(a) ()
+    repr = func(a) ()
 
     seal = func(class, new) with
         m = {self: ()}
@@ -33,6 +33,6 @@ with
     ic = instr_counter()
 (
     ic.inc()
-    print(str(ic.get()))
-    print(str(ic.accesses()))
+    print(repr(ic.get()))
+    print(repr(ic.accesses()))
 )
