@@ -2,18 +2,20 @@ with
     print = func() ()
     str = func() ()
 
+    seal = func(class, new) with
+        m = {self: ()}
+        m_class = class(m)
+    (
+        m mut.self m_class
+        new(m_class)
+    )
+
     set_counter_class = func(self) func(rep) {
         get: func() rep.x
         set: func(i) rep mut.x i
         inc: func() self.class(rep).set(self.class(rep).get() + 1)
     }
-    set_counter = (func() with
-        m = {class: func(rep) {}}
-        m_class = set_counter_class(m)
-    (
-        m mut.class m_class
-        func() m_class({x: 1})
-    ))()
+    set_counter = seal(set_counter_class, func(self) func() self({x: 1}))
     instr_counter_class = func(self) func(rep) with
         super = set_counter_class(self)
     ({
@@ -25,13 +27,9 @@ with
         inc: super(rep).inc
         accesses: func() rep.a
     })
-    instr_counter = (func() with 
-        m = {class: func(rep) {}}
-        m_class = instr_counter_class(m)
-    (
-        m mut.class m_class
-        func() m_class({x: 1, a: 0})
-    ))()
+    instr_counter = seal(instr_counter_class, func(self)
+        func() self({x: 1, a: 0})
+    )
     ic = instr_counter()
 (
     ic.inc()
