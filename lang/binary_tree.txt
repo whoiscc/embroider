@@ -1,71 +1,66 @@
-with
-    print = func(a) lang print ()
-    clock = func() lang clock ()
-    repr = func(a) lang repr ()
-    some = func(value) {Some: value}
-    none = {None: ()}
+with print = func(a) lang print ()
+with clock = func() lang clock ()
+with repr = func(a) lang repr ()
+with some = func(value) {Some: value}
+with none = {None: ()}
 
-    tree_class = func(self) func(rep) {
-        check: func() match rep.left
-            | {None} rep.item
-            | {Some} rep.item + rep.left.Some.check() + rep.right.Some.check()
-    }
-    tree = (func() with
-        m = {class: func(rep) {}}
-        m_class = tree_class(m)
-    (
-        m mut.class m_class
-        func(item, depth) with
-            rep = (func() match depth > 0
-                | {True} with
-                    item2 = item + item
-                    left = tree(item2 - 1, depth - 1)
-                    right = tree(item2, depth - 1)
-                    ({item: item, depth: depth, left: some(left), right: some(right)})
-                | {False}
-                    {item: item, depth: depth, left: none, right: none}
-            )()
-            (m_class(rep))
-    ))()
-    min_depth = 4
-    max_depth = 14
-    stretch_depth = max_depth + 1
-    start = clock()
-(
-    print("stretch tree of depth " + repr(stretch_depth))
-    print("check: " + tree(0, stretch_depth).check())
+with tree_class = func(self) func(rep) {
+    check: func() match rep.left
+        | {None} rep.item
+        | {Some} rep.item + rep.left.Some.check() + rep.right.Some.check()
+}
+with tree = 
+    with m = {class: func(rep) {}}
+    with m_class = tree_class(m) (
+    m mut.class m_class
+    func(item, depth) 
+        with rep = match depth > 0
+            | {True} 
+                with item2 = item + item
+                with left = tree(item2 - 1, depth - 1)
+                with right = tree(item2, depth - 1) (
+                {item: item, depth: depth, left: some(left), right: some(right)}
+            )
+            | {False}
+                {item: item, depth: depth, left: none, right: none} (
+        m_class(rep)
+    )
+)
 
-with
-    long_lived_tree = tree(0, max_depth)
-    iterations = 1
-    d = 0
-(
-    loop match d < max_depth | {False} break | {True} (
-        iterations mut iterations * 2
-        d mut d + 1
+with min_depth = 4
+with max_depth = 14
+with stretch_depth = max_depth + 1
+
+with start = clock() (
+print("stretch tree of depth " + repr(stretch_depth))
+print("check: " + tree(0, stretch_depth).check())
+
+with long_lived_tree = tree(0, max_depth)
+with iterations = 1
+with d = 0 (
+loop match d < max_depth | {False} break | {True} (
+    iterations mut iterations * 2
+    d mut d + 1
+)
+
+with depth = min_depth (
+loop match depth < stretch_depth | {False} break | {True} 
+    with check = 0
+    with i = 1 (
+    loop match i <= iterations | {False} break | {True} (
+        check mut check + tree(i, depth).check() + tree(-i, depth).check()
+        i mut i + 1
     )
 
-with
-    depth = min_depth,
-(
-    loop match depth < stretch_depth | {False} break | {True} with
-        check = 0
-        i = 1
-    (
-        loop match i <= iterations | {False} break | {True} (
-            check mut check + tree(i, depth).check() + tree(-i, depth).check()
-            i mut i + 1
-        )
+    print("num trees: " + repr(iterations * 2))
+    print("depth: " + repr(depth))
+    print("check: " + repr(check))
 
-        print("num trees: " + repr(iterations * 2))
-        print("depth: " + repr(depth))
-        print("check: " + repr(check))
+    iterations mut iterations / 4
+    depth mut depth + 2
+)
 
-        iterations mut iterations / 4
-        depth mut depth + 2
-    )
-
-    print("long lived tree of depth: " + repr(max_depth))
-    print("check: " + repr(long_lived_tree.check()))
-    print("elapsed: " + repr(clock() - start))
+print("long lived tree of depth: " + repr(max_depth))
+print("check: " + repr(long_lived_tree.check()))
+print("elapsed: " + repr(clock() - start))
 )))

@@ -1,25 +1,24 @@
-with
-    print = func(a) lang print ()
-    repr = func(a) lang repr ()
-    clock = func() lang clock ()
+with print = func(a) lang print ()
+with repr = func(a) lang repr ()
+with clock = func() lang clock ()
 
-    seal = func(class, new) with
-        m = {self: ()}
-        m_class = class(m)
-    (
-        m mut.self m_class
-        new(m_class)
-    )
+with seal = func(class, new) 
+    with m = {self: ()}
+    with m_class = class(m) (
+    m mut.self m_class
+    new(m_class)
+)
 
-    set_counter_class = func(self) func(rep) {
-        get: func() rep.x
-        set: func(i) rep mut.x i
-        inc: func() self.self(rep).set(self.self(rep).get() + 1)
-    }
-    set_counter = seal(set_counter_class, func(self) func() self({x: 1}))
-    instr_counter_class = func(self) func(rep) with
-        super = set_counter_class(self)
-    ({
+with set_counter_class = func(self) func(rep) {
+    get: func() rep.x
+    set: func(i) rep mut.x i
+    inc: func() self.self(rep).set(self.self(rep).get() + 1)
+}
+with set_counter = seal(set_counter_class, func(self) func() self({x: 1}))
+
+with instr_counter_class = func(self) func(rep) 
+    with super = set_counter_class(self) (
+    {
         get: super(rep).get
         set: func(i) (
             rep mut.a rep.a + 1
@@ -27,16 +26,17 @@ with
         )
         inc: super(rep).inc
         accesses: func() rep.a
-    })
-    instr_counter = seal(instr_counter_class, func(self)
-        func() self({x: 1, a: 0})
-    )
+    }
+)
+with instr_counter = seal(instr_counter_class, func(self)
+    func() self({x: 1, a: 0})
+)
 
-    ic = instr_counter()
-(
-    ic.inc()
-    print(repr(ic.get()))
-    print(repr(ic.accesses()))
+with ic = instr_counter() (
+ic.inc()
+print(repr(ic.get()))
+print(repr(ic.accesses()))
+
 )
 #     sc = set_counter()
 # (

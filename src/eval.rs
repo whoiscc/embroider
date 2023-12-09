@@ -177,7 +177,10 @@ impl Evaluator {
                     let Some(record) = r[i].downcast_mut::<Record>() else {
                         err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
                     };
-                    record.insert(*symbol, value);
+                    let evicted = record.insert(*symbol, value);
+                    if evicted.is_none() && !record.contains_key(&self.symbol_chunk) {
+                        err(EvalErrorKind::RecordKeyError(self.symbols[*symbol].clone()))?
+                    }
                 }
                 Instr::Move(i, j) => r[i] = r[j].clone(),
                 Instr::Operator(i, op, xs) => {

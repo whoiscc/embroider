@@ -34,7 +34,7 @@ pub struct Abstraction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoped {
-    pub decls: Vec<(String, ExprO)>,
+    pub decls: Vec<Vec<(String, ExprO)>>,
     pub exprs: Vec<ExprO>,
     pub value_expr: Option<Box<ExprO>>,
 }
@@ -135,21 +135,19 @@ peg::parser! {
             { v.into() }
 
         rule scoped() -> Scoped
-            = ds:decls()
-            _ "(" _ es:optional_delimited(<expr()>, <";">) _ ";" _ ")"
-            { Scoped { decls: ds, exprs: es, value_expr: None } }
-            / ds:decls()
-            _ "(" _ e:boxed_expr()? _ ")"
-            { Scoped { decls: ds, exprs: Vec::new(), value_expr: e} }
-            / ds:decls()
-            _ "(" _ es:optional_delimited(<expr()>, <";">) _ ")"
-            {
-                Scoped {
-                    decls: ds,
-                    exprs: es[..es.len() - 1].to_vec(),
-                    value_expr: Some(Box::new(es.last().cloned().unwrap()))
-                }
-            }
+            = ds:decls() _ s:scoped() { let mut s = s; s.decls.insert(0, ds); s }
+            / ds:decls() _ es:scoped_exprs()
+            { Scoped { decls: vec![ds], exprs: es.0, value_expr: es.1 } }
+            / es:scoped_exprs()
+            { Scoped { decls: Vec::new(), exprs: es.0, value_expr: es.1 } }
+
+        rule scoped_exprs() -> (Vec<ExprO>, Option<Box<ExprO>>)
+            = "(" _ es:optional_delimited(<expr()>, <";">) _ ";" _ ")"
+            { (es, None) }
+            / "(" _ e:boxed_expr()? _ ")"
+            { (Vec::new(), e) }
+            / "(" _ es:optional_delimited(<expr()>, <";">) _ ")"
+            { (es[..es.len() - 1].to_vec(), Some(Box::new(es.last().cloned().unwrap()))) }
 
         rule record() -> Vec<(String, ExprO)>
             = "{" _ fs:optional_delimited(<v:variable() _ ":" _ e:expr() { (v, e) }>, <",">) _ "}"
@@ -159,7 +157,6 @@ peg::parser! {
             = "with"
             _ ds:optional_delimited(<v:variable() _ "=" _ e:expr() { (v, e) }>, <",">)
             { ds }
-            / { Vec::new() }
 
         rule match() -> Match
             = "match" _ e:boxed_expr() _ cs:(case() ** _)
