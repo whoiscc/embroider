@@ -1,9 +1,15 @@
 use std::{
     any::{type_name, Any},
     collections::HashMap,
+    ops::Deref,
 };
 
-use crate::{compile::Symbol, gc::Addr};
+use crate::{
+    compile::Symbol,
+    eval::{EvalErrorKind, I},
+    gc::Addr,
+    Evaluator,
+};
 
 pub trait ValueType
 where
@@ -100,6 +106,58 @@ impl ValueType for Record {
     fn trace(&self) {}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct String(pub std::string::String);
+
+impl From<String> for std::string::String {
+    fn from(value: String) -> Self {
+        value.0
+    }
+}
+
+impl Deref for String {
+    type Target = std::string::String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl ValueType for String {
     fn trace(&self) {}
+}
+
+pub struct Instant(std::time::Instant);
+
+impl ValueType for Instant {
+    fn trace(&self) {}
+}
+
+impl Instant {
+    fn intrinsic_new(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        r[0] = Value::Dyn(
+            evaluator
+                .allocator
+                .alloc(Instant(std::time::Instant::now())),
+        );
+        Ok(())
+    }
+
+    fn intrinsic_elapsed(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r1 = r[1]
+            .downcast_ref::<Instant>()
+            .ok_or(EvalErrorKind::TypeError(
+                r[1].type_name().into(),
+                type_name::<Instant>().into(),
+            ))?;
+        r[0] = Value::F64(r1.0.elapsed().as_secs_f64());
+        Ok(())
+    }
+}
+
+pub fn link(evaluator: &mut Evaluator) {
+    evaluator.link("instant_new", Instant::intrinsic_new);
+    evaluator.link("instant_elapsed", Instant::intrinsic_elapsed);
 }

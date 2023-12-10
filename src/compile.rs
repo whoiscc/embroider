@@ -71,7 +71,6 @@ pub struct CompileError(pub CompileErrorKind, pub usize);
 pub enum CompileErrorKind {
     ResolveFail(String),
     NonCaptureResolveFail(String),
-    EagerRecursion(String),
     RegisterExhausted,
 }
 

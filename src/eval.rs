@@ -3,31 +3,31 @@ use std::{
     error::Error,
     fmt::Display,
     ops::{Index, IndexMut},
-    time::UNIX_EPOCH,
 };
 
 use crate::{
     ast::Operator,
     compile::{Chunk, ChunkIndex, Compiler, Const, Instr, RegIndex, Symbol},
     gc::Allocator,
-    value::Record,
+    value::{self, Record},
     Value,
 };
 
 #[derive(Debug)]
 pub struct Evaluator {
     chunks: Vec<Chunk>,
+    lang_indexes: HashMap<String, ChunkIndex>,
     symbols: Vec<String>,
-    allocator: Allocator,
+    pub allocator: Allocator,
 
     intrinsics: HashMap<ChunkIndex, Intrinsic>,
     symbol_chunk: Symbol,
     symbol_true: Symbol,
     symbol_false: Symbol,
 
-    registers: Vec<Value>,
+    pub registers: Vec<Value>,
+    pub intrinsic_base_pointer: usize,
     frames: Vec<Frame>,
-    intrinsic_base_pointer: usize,
 }
 
 type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
@@ -51,6 +51,7 @@ pub enum EvalErrorKind {
     Operator2TypeError(Operator, String, String),
     Operator1TypeError(Operator, String),
     ArityError(usize, usize),
+    Panic(String),
 }
 
 impl Display for EvalError {
@@ -63,26 +64,37 @@ impl Error for EvalError {}
 
 impl Evaluator {
     pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
-        let mut intrinsics = HashMap::<_, Intrinsic>::new();
-        intrinsics.insert(compiler.lang_indexes["print"], Self::intrinsic_print);
-        intrinsics.insert(compiler.lang_indexes["clock"], Self::intrinsic_clock);
-        intrinsics.insert(compiler.lang_indexes["repr"], Self::intrinsic_repr);
-        Self {
+        let mut this = Self {
             allocator,
             symbol_chunk: compiler.intern("%chunk".into()),
             symbol_true: compiler.intern("True".into()),
             symbol_false: compiler.intern("False".into()),
             chunks: compiler.chunks,
             symbols: compiler.symbols,
-            intrinsics,
+            lang_indexes: compiler.lang_indexes,
+            intrinsics: Default::default(),
             registers: Default::default(),
             frames: Default::default(),
             intrinsic_base_pointer: 0,
+        };
+        this.link("print", Self::intrinsic_print);
+        this.link("repr", Self::intrinsic_repr);
+        this.link("panic", Self::intrinsic_panic);
+        value::link(&mut this);
+        this
+    }
+
+    pub fn link(&mut self, name: &str, intrinsic: Intrinsic) -> bool {
+        if let Some(index) = self.lang_indexes.get(name) {
+            self.intrinsics.insert(*index, intrinsic);
+            true
+        } else {
+            false
         }
     }
 }
 
-struct I<'a>(&'a mut Vec<Value>, usize);
+pub struct I<'a>(pub &'a mut Vec<Value>, pub usize);
 
 impl Index<RegIndex> for I<'_> {
     type Output = Value;
@@ -143,7 +155,9 @@ impl Evaluator {
                 Instr::LoadConst(i, const_index) => {
                     r[i] = match chunk.consts[*const_index].clone() {
                         Const::I32(integer) => Value::I32(integer),
-                        Const::String(string) => Value::Dyn(self.allocator.alloc(string)),
+                        Const::String(string) => {
+                            Value::Dyn(self.allocator.alloc(value::String(string)))
+                        }
                     }
                 }
                 Instr::LoadRecord(i, rows) => {
@@ -199,10 +213,14 @@ impl Evaluator {
                             (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
                             (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
                             (Operator::Add, a, b) => {
-                                if let (Some(a), Some(b)) =
-                                    (a.downcast_ref::<String>(), b.downcast_ref::<String>())
-                                {
-                                    Value::Dyn(self.allocator.alloc([&**a, &**b].concat()))
+                                if let (Some(a), Some(b)) = (
+                                    a.downcast_ref::<value::String>(),
+                                    b.downcast_ref::<value::String>(),
+                                ) {
+                                    Value::Dyn(
+                                        self.allocator
+                                            .alloc(value::String(String::from(a.clone()) + b)),
+                                    )
                                 } else {
                                     err(EvalErrorKind::Operator2TypeError(
                                         *op,
@@ -287,29 +305,34 @@ impl Evaluator {
 
     fn intrinsic_print(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let Some(s) = r[1].downcast_ref::<String>() else {
+        let Some(s) = r[1].downcast_ref::<value::String>() else {
             Err(EvalErrorKind::TypeError(
                 r[1].type_name().into(),
                 "String".into(),
             ))?
         };
-        println!("{s}");
+        println!("{}", &**s);
         r[0] = Value::Unit;
-        Ok(())
-    }
-
-    fn intrinsic_clock(&mut self) -> Result<(), EvalErrorKind> {
-        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        r[0] = Value::F64(UNIX_EPOCH.elapsed().unwrap().as_secs_f64());
         Ok(())
     }
 
     fn intrinsic_repr(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
         let repr = format!("{:?}", r[1]);
-        r[0] = Value::Dyn(self.allocator.alloc(repr));
+        r[0] = Value::Dyn(self.allocator.alloc(value::String(repr)));
         // println!("{:?}", r[0]);
         // println!("{}", r[0].type_name());
         Ok(())
+    }
+
+    fn intrinsic_panic(&mut self) -> Result<(), EvalErrorKind> {
+        let r = I(&mut self.registers, self.intrinsic_base_pointer);
+        let r1 = r[1]
+            .downcast_ref::<value::String>()
+            .ok_or(EvalErrorKind::TypeError(
+                r[1].type_name().into(),
+                "String".into(),
+            ))?;
+        Err(EvalErrorKind::Panic(String::from(r1.clone())))
     }
 }
