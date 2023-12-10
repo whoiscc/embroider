@@ -53,11 +53,9 @@ pub struct Compiler {
     symbol_indexes: HashMap<String, Symbol>,
 
     instrs: Vec<Instr>,
-    postponed_capture_instrs: Vec<Instr>,
     consts: Vec<Const>,
     reg_index: RegIndex,
     scopes: Vec<HashMap<String, RegIndex>>,
-    quasi_scope: HashMap<String, RegIndex>,
     capture_scopes: Vec<HashMap<String, RegIndex>>,
     captures: HashSet<String>,
     return_indexes: Vec<InstrIndex>,
@@ -72,8 +70,8 @@ pub struct CompileError(pub CompileErrorKind, pub usize);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileErrorKind {
     ResolveFail(String),
-    ResolveMutFail(String),
-    NestedScoping,
+    NonCaptureResolveFail(String),
+    EagerRecursion(String),
     RegisterExhausted,
 }
 
@@ -112,14 +110,14 @@ impl Compiler {
         Ok(chunk_index)
     }
 
-    pub fn resolve(&mut self, name: String, capturing: bool) -> Option<RegIndex> {
+    pub fn resolve(&mut self, name: String, capturing: bool) -> Result<RegIndex, CompileErrorKind> {
         for scope in self.scopes.iter().rev() {
             if let Some(reg_index) = scope.get(&name) {
-                return Some(*reg_index);
+                return Ok(*reg_index);
             }
         }
         if !capturing {
-            return None;
+            return Err(CompileErrorKind::NonCaptureResolveFail(name));
         }
         let symbol = self.intern(name.clone());
         for scope in self.capture_scopes.iter().rev() {
@@ -128,10 +126,10 @@ impl Compiler {
                 // is it always safe to directly use slot `self.reg_index`?
                 self.instrs
                     .push(Instr::LoadField(self.reg_index, 0, symbol));
-                return Some(self.reg_index);
+                return Ok(self.reg_index);
             }
         }
-        None
+        Err(CompileErrorKind::ResolveFail(name))
     }
 
     // convention: anything below `self.reg_index` is unchanged
@@ -172,12 +170,16 @@ impl Compiler {
                 let arity = abstraction.variables.len();
                 let saved_captures = take(&mut self.captures);
                 let saved_scopes = take(&mut self.scopes);
-                let saved_quasi_scope = take(&mut self.quasi_scope);
                 let saved_capture_scopes = self.capture_scopes.clone();
                 self.capture_scopes.extend(saved_scopes.clone());
-                self.capture_scopes.push(saved_quasi_scope.clone());
+                let explicit_captures = abstraction
+                    .captures
+                    .into_iter()
+                    .map(|name| (name, RegIndex::MAX))
+                    .collect::<HashMap<_, _>>();
+                self.capture_scopes.push(explicit_captures.clone());
                 let mut scope = HashMap::new();
-                let mut i = 1; // reserve register 0 for capturing record
+                let mut i = 1; // reserve register 0 for the "closure object"
                 for name in abstraction.variables {
                     scope.insert(name, i);
                     i += 1
@@ -209,31 +211,28 @@ impl Compiler {
                     self.lang_indexes.insert(lang, chunk_index);
                 }
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
-                self.capture_scopes = saved_capture_scopes;
                 self.scopes = saved_scopes;
-                self.quasi_scope = saved_quasi_scope;
+                self.capture_scopes = saved_capture_scopes;
                 // `resolve` which may use `self.reg_index`, so adjust it to a safe position
                 self.reg_index = reg_index + 1;
                 // println!("{} {:?}", chunk_index, self.quasi_scope);
                 // println!("{:?}", self.captures);
                 for name in replace(&mut self.captures, saved_captures) {
-                    let symbol = self.intern(name.clone());
-                    if let Some(resolved) = self.quasi_scope.get(&name) {
-                        self.postponed_capture_instrs
-                            .push(Instr::StoreField(reg_index, symbol, *resolved))
-                    } else {
-                        let resolved = self
-                            .resolve(name.clone(), true)
-                            .unwrap_or_else(|| panic!("captured variable {name} can be resolved"));
-                        self.instrs
-                            .push(Instr::StoreField(reg_index, symbol, resolved))
+                    if explicit_captures.contains_key(&name) {
+                        continue;
                     }
+                    let symbol = self.intern(name.clone());
+                    let resolved = self
+                        .resolve(name.clone(), true)
+                        .unwrap_or_else(|kind| panic!("{}", CompileError(kind, offset)));
+                    self.instrs
+                        .push(Instr::StoreField(reg_index, symbol, resolved))
                 }
             }
             Expr::Variable(name) => {
                 let resolved = self
                     .resolve(name.clone(), true)
-                    .ok_or(CompileError(CompileErrorKind::ResolveFail(name), offset))?;
+                    .map_err(|kind| CompileError(kind, offset))?;
                 self.instrs.push(Instr::Move(self.reg_index, resolved))
             }
             Expr::GetField(expr, name) => {
@@ -244,30 +243,18 @@ impl Compiler {
                     .push(Instr::LoadField(reg_index, self.reg_index, symbol))
             }
             Expr::Scoped(scoped) => {
-                if !self.quasi_scope.is_empty() && !scoped.decls.is_empty() {
-                    Err(CompileError(CompileErrorKind::NestedScoping, offset))?
-                }
                 let saved_scopes = self.scopes.clone();
                 for scope_decls in scoped.decls {
-                    self.quasi_scope = scope_decls
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (name, _))| (name.clone(), self.reg_index + i as RegIndex))
-                        .collect();
-                    let saved_postponed_capture_instrs = take(&mut self.postponed_capture_instrs);
                     let saved_description_hint = take(&mut self.description_hint);
+                    self.scopes.push(Default::default());
                     for (name, expr) in scope_decls {
                         self.description_hint = name.clone();
                         // println!("before {name}: {:?}", self.quasi_scope);
                         self.compile_expr(expr)?;
+                        self.scopes.last_mut().unwrap().insert(name, self.reg_index);
                         self.reg_index += 1
                     }
                     self.description_hint = saved_description_hint;
-                    self.instrs.extend(replace(
-                        &mut self.postponed_capture_instrs,
-                        saved_postponed_capture_instrs,
-                    ));
-                    self.scopes.push(take(&mut self.quasi_scope))
                 }
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
@@ -305,7 +292,7 @@ impl Compiler {
                 self.compile_expr(*expr)?;
                 let resolved = self
                     .resolve(name.clone(), false)
-                    .ok_or(CompileError(CompileErrorKind::ResolveMutFail(name), offset))?;
+                    .map_err(|kind| CompileError(kind, offset))?;
                 self.instrs.push(Instr::Move(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
@@ -317,6 +304,16 @@ impl Compiler {
                 self.instrs
                     .push(Instr::StoreField(reg_index, symbol, self.reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
+            }
+            Expr::Capture(expr, record) => {
+                self.compile_expr(*expr)?;
+                self.reg_index += 1;
+                for (name, expr) in record {
+                    self.compile_expr(expr)?;
+                    let symbol = self.intern(name);
+                    self.instrs
+                        .push(Instr::StoreField(reg_index, symbol, reg_index + 1))
+                }
             }
             Expr::Match(matching) => {
                 self.compile_expr(*matching.variant)?;

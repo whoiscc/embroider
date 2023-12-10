@@ -30,7 +30,7 @@ pub struct Evaluator {
     intrinsic_base_pointer: usize,
 }
 
-type Intrinsic = fn(&mut Evaluator) -> anyhow::Result<()>;
+type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
 
 #[derive(Debug)]
 struct Frame {
@@ -60,14 +60,6 @@ impl Display for EvalError {
 }
 
 impl Error for EvalError {}
-
-impl Display for EvalErrorKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl Error for EvalErrorKind {}
 
 impl Evaluator {
     pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
@@ -137,10 +129,14 @@ impl Evaluator {
                 self.frames.pop().unwrap();
                 continue;
             };
-            frame.instr_pointer += 1;
 
+            let err = {
+                let chunk_index = frame.chunk_index;
+                let instr_pointer = frame.instr_pointer;
+                move |kind| Err(EvalError(kind, chunk_index, instr_pointer))
+            };
+            frame.instr_pointer += 1;
             let mut r = I(&mut self.registers, frame.base_pointer);
-            let err = |kind| Err(EvalError(kind, frame.chunk_index, frame.instr_pointer - 1));
             // println!("{instr:?}");
             match instr {
                 Instr::LoadUnit(i) => r[i] = Value::Unit,
@@ -249,7 +245,9 @@ impl Evaluator {
                     }
                     if let Some(intrinsic) = self.intrinsics.get(chunk_index) {
                         self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
-                        intrinsic(self)?
+                        if let Err(kind) = intrinsic(self) {
+                            err(kind)?
+                        }
                     } else {
                         let frame = Frame {
                             chunk_index: *chunk_index,
@@ -287,7 +285,7 @@ impl Evaluator {
         Ok(())
     }
 
-    fn intrinsic_print(&mut self) -> anyhow::Result<()> {
+    fn intrinsic_print(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
         let Some(s) = r[1].downcast_ref::<String>() else {
             Err(EvalErrorKind::TypeError(
@@ -300,13 +298,13 @@ impl Evaluator {
         Ok(())
     }
 
-    fn intrinsic_clock(&mut self) -> anyhow::Result<()> {
+    fn intrinsic_clock(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
         r[0] = Value::F64(UNIX_EPOCH.elapsed().unwrap().as_secs_f64());
         Ok(())
     }
 
-    fn intrinsic_repr(&mut self) -> anyhow::Result<()> {
+    fn intrinsic_repr(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
         let repr = format!("{:?}", r[1]);
         r[0] = Value::Dyn(self.allocator.alloc(repr));

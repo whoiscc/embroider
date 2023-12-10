@@ -16,6 +16,7 @@ pub enum Expr {
 
     Mut(String, Box<ExprO>),
     MutField(Box<ExprO>, String, Box<ExprO>),
+    Capture(Box<ExprO>, Vec<(String, ExprO)>),
 
     Return(Box<ExprO>),
     Break,
@@ -28,15 +29,30 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Abstraction {
     pub variables: Vec<String>,
+    pub captures: Vec<String>,
     pub lang: Option<String>,
     pub expr: Box<ExprO>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoped {
+    // a relatively compact representation, outer layer list for list of `with`, and inner layer
+    // list for "concurrent" declarations from each `with`. so
+    //     with a = ...
+    //     with b = ..., c = ... (expr)
+    // will be [[(a, ...)], [(b, ...), (c, ...)]]
+    // there was a time where `with` is prepended to decalarations whenever possible, and this
+    // compacted representation can avoid terribly deep nested AST
+    // this does not cause problem after i revert the coding style, so just save it in case needed
     pub decls: Vec<Vec<(String, ExprO)>>,
     pub exprs: Vec<ExprO>,
     pub value_expr: Option<Box<ExprO>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    pub variant: Box<ExprO>,
+    pub cases: Vec<(String, Option<String>, ExprO)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,12 +73,6 @@ pub enum Operator {
     Ge,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Match {
-    pub variant: Box<ExprO>,
-    pub cases: Vec<(String, Option<String>, ExprO)>,
-}
-
 peg::parser! {
     pub grammar parse() for str {
         pub rule program() -> ExprO = e:expr() _ { e }
@@ -73,6 +83,7 @@ peg::parser! {
             --
             e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
             v:variable() _ "mut" _ m:boxed_expr() { Expr::Mut(v, m) }
+            e:@ _ "capture" _ r:record() { Expr::Capture(Box::new(e), r) }
             --
             e:(@) _ "or" _ x:@ { Expr::Operator(Operator::Or, vec![e, x]) }
             --
@@ -127,8 +138,9 @@ peg::parser! {
             = "func"
             _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
             _ l:("lang" _ l:variable() { l })?
+            _ cs:("capture" _ "{" _ vs:optional_delimited(<variable()>, <",">) _ "}" { vs } / { Vec::new() })
             _ e:boxed_expr()
-            { Abstraction { variables: vs, lang: l, expr: e } }
+            { Abstraction { variables: vs, captures: cs, lang: l, expr: e } }
 
         rule variable() -> String
             = v:$(['a'..='z' | 'A'..='Z' | '_'] ['a'..='z' | 'A'..='Z' | '_' | '0'..='9']*)
