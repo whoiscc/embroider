@@ -72,6 +72,7 @@ pub enum CompileErrorKind {
     ResolveFail(String),
     NonCaptureResolveFail(String),
     RegisterExhausted,
+    ContinueOutsideLoop,
 }
 
 impl Display for CompileError {
@@ -185,6 +186,8 @@ impl Compiler {
                 }
                 self.scopes.push(scope);
                 let saved_return_indexes = take(&mut self.return_indexes);
+                let saved_continue_jump_index = take(&mut self.continue_jump_index);
+                let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
                 self.reg_index = i;
@@ -198,6 +201,8 @@ impl Compiler {
                     };
                     *index = return_jump_index
                 }
+                self.continue_jump_index = saved_continue_jump_index;
+                self.break_indexes = saved_break_indexes;
                 let chunk_index = self.chunks.len();
                 let chunk = Chunk {
                     description: self.description_hint.clone(),
@@ -377,10 +382,11 @@ impl Compiler {
                 self.break_indexes.push(self.instrs.len());
                 self.instrs.push(Instr::Jump(InstrIndex::MAX))
             }
-            Expr::Continue => self.instrs.push(Instr::Jump(
-                self.continue_jump_index
-                    .ok_or(anyhow::anyhow!("continue from outside loop"))?,
-            )),
+            Expr::Continue => self
+                .instrs
+                .push(Instr::Jump(self.continue_jump_index.ok_or(
+                    CompileError(CompileErrorKind::ContinueOutsideLoop, offset),
+                )?)),
         }
         self.reg_index = reg_index;
         Ok(())

@@ -1,4 +1,4 @@
-with 
+with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 Instant = {

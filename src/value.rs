@@ -115,6 +115,21 @@ impl Value {
             _ => false,
         }
     }
+
+    fn intrinsic_u64(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let value = match &r[1] {
+            Value::U64(value) => *value,
+            Value::I32(value) => *value as _,
+            Value::F64(value) => *value as _,
+            _ => Err(EvalErrorKind::TypeError(
+                r[1].type_name().into(),
+                "(Numeric)".into(),
+            ))?,
+        };
+        r[0] = Value::U64(value);
+        Ok(())
+    }
 }
 
 pub type Record = HashMap<Symbol, Value>;
@@ -163,6 +178,13 @@ impl Vec {
         Ok(())
     }
 
+    fn intrinsic_len(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r1 = r[1].downcast_ref::<Vec>()?;
+        r[0] = Value::U64(r1.0.len() as _);
+        Ok(())
+    }
+
     fn intrinsic_push(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
         let r2 = r[2].clone();
@@ -196,6 +218,22 @@ impl Vec {
                 .clone();
         Ok(())
     }
+
+    fn intrinsic_index_mut(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r2 = *r[2].downcast_ref::<u64>()?;
+        let r3 = r[3].clone();
+        let r1 = r[1].downcast_mut::<Vec>()?;
+        let r1_len = r1.0.len();
+        *r1.0
+            .get_mut(r2 as usize)
+            .ok_or(EvalErrorKind::Panic(format!(
+                "index out of bound: {} >= {}",
+                r2, r1_len,
+            )))? = r3;
+        r[0] = Value::Unit;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -206,7 +244,7 @@ impl ValueType for Instant {
 }
 
 impl Instant {
-    fn intrinsic_new(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+    fn intrinsic_now(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
         r[0] = Value::Dyn(
             evaluator
@@ -225,10 +263,13 @@ impl Instant {
 }
 
 pub fn link(evaluator: &mut Evaluator) {
-    evaluator.link("instant_new", Instant::intrinsic_new);
+    evaluator.link("value_u64", Value::intrinsic_u64);
+    evaluator.link("instant_now", Instant::intrinsic_now);
     evaluator.link("instant_elapsed", Instant::intrinsic_elapsed);
     evaluator.link("vec_new", Vec::intrinsic_new);
+    evaluator.link("vec_len", Vec::intrinsic_len);
     evaluator.link("vec_push", Vec::intrinsic_push);
     evaluator.link("vec_insert", Vec::intrinsic_insert);
     evaluator.link("vec_index", Vec::intrinsic_index);
+    evaluator.link("vec_index_mut", Vec::intrinsic_index_mut);
 }

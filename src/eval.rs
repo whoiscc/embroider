@@ -205,11 +205,30 @@ impl Evaluator {
                             (Operator::Gt, Value::I32(a), Value::I32(b)) => Value::Bool(*a > *b),
                             (Operator::Le, Value::I32(a), Value::I32(b)) => Value::Bool(*a <= *b),
                             (Operator::Ge, Value::I32(a), Value::I32(b)) => Value::Bool(*a >= *b),
+
                             (Operator::Add, Value::F64(a), Value::F64(b)) => Value::F64(*a + *b),
                             (Operator::Sub, Value::F64(a), Value::F64(b)) => Value::F64(*a - *b),
                             (Operator::Mul, Value::F64(a), Value::F64(b)) => Value::F64(*a * *b),
                             (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
                             (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
+
+                            (Operator::Add, Value::U64(a), Value::U64(b)) => Value::U64(*a + *b),
+                            (Operator::Sub, Value::U64(a), Value::U64(b)) => Value::U64(*a - *b),
+                            (Operator::Mul, Value::U64(a), Value::U64(b)) => Value::U64(*a * *b),
+                            (Operator::Div, Value::U64(a), Value::U64(b)) => Value::U64(*a / *b),
+                            (Operator::Rem, Value::U64(a), Value::U64(b)) => Value::U64(*a % *b),
+                            (Operator::Eq, Value::U64(a), Value::U64(b)) => Value::Bool(*a == *b),
+                            (Operator::Ne, Value::U64(a), Value::U64(b)) => Value::Bool(*a != *b),
+                            (Operator::Lt, Value::U64(a), Value::U64(b)) => Value::Bool(*a < *b),
+                            (Operator::Gt, Value::U64(a), Value::U64(b)) => Value::Bool(*a > *b),
+                            (Operator::Le, Value::U64(a), Value::U64(b)) => Value::Bool(*a <= *b),
+                            (Operator::Ge, Value::U64(a), Value::U64(b)) => Value::Bool(*a >= *b),
+                            (Operator::Lsh, Value::U64(a), Value::U64(b)) => Value::U64(*a << *b),
+                            (Operator::Rsh, Value::U64(a), Value::U64(b)) => Value::U64(*a >> *b),
+                            (Operator::Xor, Value::U64(a), Value::U64(b)) => Value::U64(*a ^ *b),
+                            (Operator::Band, Value::U64(a), Value::U64(b)) => Value::U64(*a & *b),
+                            (Operator::Bor, Value::U64(a), Value::U64(b)) => Value::U64(*a | *b),
+
                             (Operator::Add, a, b) => {
                                 if let (Ok(a), Ok(b)) = (
                                     a.downcast_ref::<value::String>(),

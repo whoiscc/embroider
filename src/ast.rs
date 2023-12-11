@@ -63,6 +63,7 @@ pub enum Operator {
     Div,
     Rem,
     Neg,
+    
     And,
     Or,
     Eq,
@@ -71,6 +72,12 @@ pub enum Operator {
     Gt,
     Le,
     Ge,
+    
+    Lsh,
+    Rsh,
+    Xor,
+    Band,
+    Bor,
 }
 
 peg::parser! {
@@ -89,19 +96,28 @@ peg::parser! {
             --
             e:(@) _ "and" _ x:@ { Expr::Operator(Operator::And, vec![e, x]) }
             --
-            e:(@) _ "+" _ x:@ { Expr::Operator(Operator::Add, vec![e, x]) }
-            e:(@) _ "-" _ x:@ { Expr::Operator(Operator::Sub, vec![e, x]) }
-            --
-            e:(@) _ "*" _ x:@ { Expr::Operator(Operator::Mul, vec![e, x]) }
-            e:(@) _ "/" _ x:@ { Expr::Operator(Operator::Div, vec![e, x]) }
-            e:(@) _ "%" _ x:@ { Expr::Operator(Operator::Rem, vec![e, x]) }
-            --
             e:(@) _ "==" _ x:@ { Expr::Operator(Operator::Eq, vec![e, x]) }
             e:(@) _ "!=" _ x:@ { Expr::Operator(Operator::Ne, vec![e, x]) }
             e:(@) _ "<=" _ x:@ { Expr::Operator(Operator::Le, vec![e, x]) }
             e:(@) _ ">=" _ x:@ { Expr::Operator(Operator::Ge, vec![e, x]) }
             e:(@) _ "<" _ x:@ { Expr::Operator(Operator::Lt, vec![e, x]) }
             e:(@) _ ">" _ x:@ { Expr::Operator(Operator::Gt, vec![e, x]) }
+            --
+            e:(@) _ "|" _ x:@ { Expr::Operator(Operator::Bor, vec![e, x]) }
+            --
+            e:(@) _ "^" _ x:@ { Expr::Operator(Operator::Xor, vec![e, x]) }
+            --
+            e:(@) _ "&" _ x:@ { Expr::Operator(Operator::Band, vec![e, x]) }
+            --
+            e:(@) _ "<<" _ x:@ { Expr::Operator(Operator::Lsh, vec![e, x]) }
+            e:(@) _ ">>" _ x:@ { Expr::Operator(Operator::Rsh, vec![e, x]) }
+            --
+            e:(@) _ "+" _ x:@ { Expr::Operator(Operator::Add, vec![e, x]) }
+            e:(@) _ "-" _ x:@ { Expr::Operator(Operator::Sub, vec![e, x]) }
+            --
+            e:(@) _ "*" _ x:@ { Expr::Operator(Operator::Mul, vec![e, x]) }
+            e:(@) _ "/" _ x:@ { Expr::Operator(Operator::Div, vec![e, x]) }
+            e:(@) _ "%" _ x:@ { Expr::Operator(Operator::Rem, vec![e, x]) }
             --
             "-" _ e:@ { Expr::Operator(Operator::Neg, vec![e]) }
             --
