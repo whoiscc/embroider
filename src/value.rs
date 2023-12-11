@@ -27,9 +27,9 @@ pub trait ValueTypeExt {
 
     fn type_name(&self) -> &str;
 
-    fn any_ref(&self) -> &dyn Any;
+    fn any_ref(&self) -> &(dyn Any + 'static);
 
-    fn any_mut(&mut self) -> &mut dyn Any;
+    fn any_mut(&mut self) -> &mut (dyn Any + 'static);
 }
 
 impl<T: ValueType> ValueTypeExt for T {
@@ -41,11 +41,11 @@ impl<T: ValueType> ValueTypeExt for T {
         ValueType::type_name(self)
     }
 
-    fn any_ref(&self) -> &dyn Any {
+    fn any_ref(&self) -> &(dyn Any + 'static) {
         self
     }
 
-    fn any_mut(&mut self) -> &mut dyn Any {
+    fn any_mut(&mut self) -> &mut (dyn Any + 'static) {
         self
     }
 }
@@ -79,19 +79,41 @@ impl Value {
         }
     }
 
-    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
-        let Self::Dyn(addr) = self else { return None };
-        addr.access_shared().any_ref().downcast_ref()
+    pub fn downcast_ref<T: 'static>(&self) -> Result<&T, EvalErrorKind> {
+        match self {
+            Self::I32(value) => (value as &dyn Any).downcast_ref(),
+            Self::U64(value) => (value as &dyn Any).downcast_ref(),
+            Self::F64(value) => (value as &dyn Any).downcast_ref(),
+            Self::Dyn(addr) => addr.access_shared().any_ref().downcast_ref(),
+            _ => None,
+        }
+        .ok_or(EvalErrorKind::TypeError(
+            self.type_name().into(),
+            type_name::<T>().into(),
+        ))
     }
 
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let Self::Dyn(addr) = self else { return None };
-        addr.access_exclusive().any_mut().downcast_mut()
+    pub fn downcast_mut<T: 'static>(&mut self) -> Result<&mut T, EvalErrorKind> {
+        // workaround for lifetime error, not sure why it happens
+        let name = self.type_name().into();
+        match self {
+            Self::I32(value) => (value as &mut dyn Any).downcast_mut(),
+            Self::U64(value) => (value as &mut dyn Any).downcast_mut(),
+            Self::F64(value) => (value as &mut dyn Any).downcast_mut(),
+            Self::Dyn(addr) => addr.access_exclusive().any_mut().downcast_mut(),
+            _ => None,
+        }
+        .ok_or(EvalErrorKind::TypeError(name, type_name::<T>().into()))
     }
 
     pub fn is<T: 'static>(&self) -> bool {
-        let Self::Dyn(addr) = self else { return false };
-        addr.access_shared().any_ref().is::<T>()
+        match self {
+            Self::I32(value) => (value as &dyn Any).is::<T>(),
+            Self::U64(value) => (value as &dyn Any).is::<T>(),
+            Self::F64(value) => (value as &dyn Any).is::<T>(),
+            Self::Dyn(addr) => addr.access_shared().any_ref().is::<T>(),
+            _ => false,
+        }
     }
 }
 
@@ -127,6 +149,56 @@ impl ValueType for String {
     fn trace(&self) {}
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Vec(std::vec::Vec<Value>);
+
+impl ValueType for Vec {
+    fn trace(&self) {}
+}
+
+impl Vec {
+    fn intrinsic_new(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        r[0] = Value::Dyn(evaluator.allocator.alloc(Vec::default()));
+        Ok(())
+    }
+
+    fn intrinsic_push(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r2 = r[2].clone();
+        let r1 = r[1].downcast_mut::<Vec>()?;
+        r1.0.push(r2);
+        r[0] = Value::Unit;
+        Ok(())
+    }
+
+    fn intrinsic_insert(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r2 = *r[2].downcast_ref::<u64>()?;
+        let r3 = r[3].clone();
+        let r1 = r[1].downcast_mut::<Vec>()?;
+        r1.0.insert(r2 as _, r3);
+        r[0] = Value::Unit;
+        Ok(())
+    }
+
+    fn intrinsic_index(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+        let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+        let r1 = r[1].downcast_ref::<Vec>()?;
+        let r2 = r[2].downcast_ref::<u64>()?;
+        r[0] =
+            r1.0.get(*r2 as usize)
+                .ok_or(EvalErrorKind::Panic(format!(
+                    "index out of bound: {} >= {}",
+                    r2,
+                    r1.0.len()
+                )))?
+                .clone();
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instant(std::time::Instant);
 
 impl ValueType for Instant {
@@ -146,12 +218,7 @@ impl Instant {
 
     fn intrinsic_elapsed(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r1 = r[1]
-            .downcast_ref::<Instant>()
-            .ok_or(EvalErrorKind::TypeError(
-                r[1].type_name().into(),
-                type_name::<Instant>().into(),
-            ))?;
+        let r1 = r[1].downcast_ref::<Instant>()?;
         r[0] = Value::F64(r1.0.elapsed().as_secs_f64());
         Ok(())
     }
@@ -160,4 +227,8 @@ impl Instant {
 pub fn link(evaluator: &mut Evaluator) {
     evaluator.link("instant_new", Instant::intrinsic_new);
     evaluator.link("instant_elapsed", Instant::intrinsic_elapsed);
+    evaluator.link("vec_new", Vec::intrinsic_new);
+    evaluator.link("vec_push", Vec::intrinsic_push);
+    evaluator.link("vec_insert", Vec::intrinsic_insert);
+    evaluator.link("vec_index", Vec::intrinsic_index);
 }

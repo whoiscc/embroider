@@ -1,7 +1,10 @@
 with 
 print = func(a) lang print ()
-clock = func() lang clock ()
 repr = func(a) lang repr ()
+Instant = {
+    new: func() lang instant_new ()
+    elapsed: func(a) lang instant_elapsed ()
+}
 some = func(value) {Some: value}
 none = {None: ()}
 
@@ -36,7 +39,7 @@ min_depth = 4
 max_depth = 14
 stretch_depth = max_depth + 1
 
-start = clock() (
+start = Instant.new() (
 print("stretch tree of depth " + repr(stretch_depth))
 print("check: " + repr(tree(0, stretch_depth).check()))
 
@@ -68,5 +71,5 @@ loop match depth < stretch_depth | {False} break | {True} with
 
 print("long lived tree of depth: " + repr(max_depth))
 print("check: " + repr(long_lived_tree.check()))
-print("elapsed: " + repr(clock() - start))
+print("elapsed: " + repr(Instant.elapsed(start)))
 )))

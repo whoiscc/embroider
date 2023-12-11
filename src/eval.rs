@@ -45,9 +45,7 @@ pub struct EvalError(pub EvalErrorKind, pub ChunkIndex, pub usize);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalErrorKind {
     TypeError(String, String),
-    RecordTypeError(String),
     RecordKeyError(String),
-    ApplyTypeError(String),
     Operator2TypeError(Operator, String, String),
     Operator1TypeError(Operator, String),
     ArityError(usize, usize),
@@ -145,7 +143,7 @@ impl Evaluator {
             let err = {
                 let chunk_index = frame.chunk_index;
                 let instr_pointer = frame.instr_pointer;
-                move |kind| Err(EvalError(kind, chunk_index, instr_pointer))
+                move |kind| EvalError(kind, chunk_index, instr_pointer)
             };
             frame.instr_pointer += 1;
             let mut r = I(&mut self.registers, frame.base_pointer);
@@ -173,23 +171,23 @@ impl Evaluator {
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
                 Instr::LoadField(i, j, symbol) => {
-                    let Some(record) = r[j].downcast_ref::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[j].type_name().into()))?
-                    };
-                    if let Some(value) = record.get(symbol) {
+                    let rj = r[j].downcast_ref::<Record>().map_err(err)?;
+                    if let Some(value) = rj.get(symbol) {
                         r[i] = value.clone()
                     } else {
-                        err(EvalErrorKind::RecordKeyError(self.symbols[*symbol].clone()))?
+                        Err(err(EvalErrorKind::RecordKeyError(
+                            self.symbols[*symbol].clone(),
+                        )))?
                     }
                 }
                 Instr::StoreField(i, symbol, j) => {
                     let value = r[j].clone();
-                    let Some(record) = r[i].downcast_mut::<Record>() else {
-                        err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
-                    };
-                    let evicted = record.insert(*symbol, value);
-                    if evicted.is_none() && !record.contains_key(&self.symbol_chunk) {
-                        err(EvalErrorKind::RecordKeyError(self.symbols[*symbol].clone()))?
+                    let ri = r[i].downcast_mut::<Record>().map_err(err)?;
+                    let evicted = ri.insert(*symbol, value);
+                    if evicted.is_none() && !ri.contains_key(&self.symbol_chunk) {
+                        Err(err(EvalErrorKind::RecordKeyError(
+                            self.symbols[*symbol].clone(),
+                        )))?
                     }
                 }
                 Instr::Move(i, j) => r[i] = r[j].clone(),
@@ -213,7 +211,7 @@ impl Evaluator {
                             (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
                             (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
                             (Operator::Add, a, b) => {
-                                if let (Some(a), Some(b)) = (
+                                if let (Ok(a), Ok(b)) = (
                                     a.downcast_ref::<value::String>(),
                                     b.downcast_ref::<value::String>(),
                                 ) {
@@ -222,50 +220,48 @@ impl Evaluator {
                                             .alloc(value::String(String::from(a.clone()) + b)),
                                     )
                                 } else {
-                                    err(EvalErrorKind::Operator2TypeError(
+                                    Err(err(EvalErrorKind::Operator2TypeError(
                                         *op,
                                         r[&xs[0]].type_name().into(),
                                         r[&xs[1]].type_name().into(),
-                                    ))?
+                                    )))?
                                 }
                             }
-                            _ => err(EvalErrorKind::Operator2TypeError(
+                            _ => Err(err(EvalErrorKind::Operator2TypeError(
                                 *op,
                                 r[&xs[0]].type_name().into(),
                                 r[&xs[1]].type_name().into(),
-                            ))?,
+                            )))?,
                         }
                     } else if xs.len() == 1 {
                         match (op, &r[&xs[0]]) {
                             (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
-                            _ => err(EvalErrorKind::Operator1TypeError(
+                            _ => Err(err(EvalErrorKind::Operator1TypeError(
                                 *op,
                                 r[&xs[0]].type_name().into(),
-                            ))?,
+                            )))?,
                         }
                     } else {
                         unreachable!()
                     }
                 }
                 Instr::Apply(i, arity) => {
-                    let Some(record) = r[i].downcast_ref::<Record>() else {
-                        err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
-                    };
-                    let Some(Value::ChunkIndex(chunk_index)) = record.get(&self.symbol_chunk)
-                    else {
-                        err(EvalErrorKind::ApplyTypeError(r[i].type_name().into()))?
+                    let ri = r[i].downcast_ref::<Record>().map_err(err)?;
+                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.symbol_chunk) else {
+                        Err(err(EvalErrorKind::TypeError(
+                            "Record".into(),
+                            "(Abstraction)".into(),
+                        )))?
                     };
                     if *arity != self.chunks[*chunk_index].arity {
-                        err(EvalErrorKind::ArityError(
+                        Err(err(EvalErrorKind::ArityError(
                             *arity,
                             self.chunks[*chunk_index].arity,
-                        ))?
+                        )))?
                     }
                     if let Some(intrinsic) = self.intrinsics.get(chunk_index) {
                         self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
-                        if let Err(kind) = intrinsic(self) {
-                            err(kind)?
-                        }
+                        intrinsic(self).map_err(err)?
                     } else {
                         let frame = Frame {
                             chunk_index: *chunk_index,
@@ -284,13 +280,14 @@ impl Evaluator {
                             *symbol == self.symbol_false
                         }
                     } else {
-                        let Some(record) = r[i].downcast_ref::<Record>() else {
-                            err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
-                        };
-                        if record.contains_key(&self.symbol_chunk) {
-                            err(EvalErrorKind::RecordTypeError(r[i].type_name().into()))?
+                        let ri = r[i].downcast_ref::<Record>().map_err(err)?;
+                        if ri.contains_key(&self.symbol_chunk) {
+                            Err(err(EvalErrorKind::TypeError(
+                                "(Abstraction)".into(),
+                                "Record".into(),
+                            )))?
                         }
-                        record.contains_key(symbol)
+                        ri.contains_key(symbol)
                     };
                     if !matched {
                         frame.instr_pointer = *instr
@@ -305,13 +302,8 @@ impl Evaluator {
 
     fn intrinsic_print(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let Some(s) = r[1].downcast_ref::<value::String>() else {
-            Err(EvalErrorKind::TypeError(
-                r[1].type_name().into(),
-                "String".into(),
-            ))?
-        };
-        println!("{}", &**s);
+        let r1 = r[1].downcast_ref::<value::String>()?;
+        println!("{}", &**r1);
         r[0] = Value::Unit;
         Ok(())
     }
@@ -327,12 +319,7 @@ impl Evaluator {
 
     fn intrinsic_panic(&mut self) -> Result<(), EvalErrorKind> {
         let r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let r1 = r[1]
-            .downcast_ref::<value::String>()
-            .ok_or(EvalErrorKind::TypeError(
-                r[1].type_name().into(),
-                "String".into(),
-            ))?;
+        let r1 = r[1].downcast_ref::<value::String>()?;
         Err(EvalErrorKind::Panic(String::from(r1.clone())))
     }
 }
