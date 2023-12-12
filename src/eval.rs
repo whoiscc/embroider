@@ -365,10 +365,9 @@ impl Evaluator {
                     r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
                 }
                 Instr::Suspend(i) => {
-                    let ri = r[i].downcast_ref::<Control>().map_err(err)?;
-                    if worker.suspend(ri) {
-                        break;
-                    }
+                    r[i].downcast_ref::<Control>().map_err(err)?; // just check
+                    worker.suspend(r[i].clone());
+                    break;
                 }
                 Instr::Resume(i) => {
                     let ri = r[i].downcast_ref::<Control>().map_err(err)?;

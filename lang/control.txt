@@ -1,0 +1,4 @@
+with k = control (
+spawn func() resume k
+suspend k
+)

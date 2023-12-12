@@ -44,16 +44,14 @@ fn main() -> anyhow::Result<()> {
     for chunk_index in 0..compiler.chunks.len() {
         writeln!(instr_out, "{}", compiler.disassemble(chunk_index))?
     }
-    let (mut scheduler, workers) = new_system(EvaluatorConsts::new(compiler), chunk_index);
+    let workers = new_system(EvaluatorConsts::new(compiler), chunk_index);
 
     let n = std::thread::available_parallelism()?.get();
-    let group = StopGroup::new(n);
-    let scheduler = group.spawn(move |stop_rx| scheduler.run(stop_rx));
+    let group = StopGroup::new(n - 1);
     let workers = workers
         .map(|mut worker| group.spawn(move |stop_rx| worker.run(stop_rx)))
         .take(std::thread::available_parallelism()?.get())
         .collect::<Vec<_>>();
-    scheduler.join().unwrap()?;
     for worker in workers {
         worker.join().unwrap()?
     }

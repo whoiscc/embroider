@@ -394,16 +394,19 @@ impl Compiler {
                 )?)),
             Expr::Spawn(expr) => {
                 self.compile_expr(*expr)?;
-                self.instrs.push(Instr::Spawn(reg_index))
+                self.instrs.push(Instr::Spawn(reg_index));
+                self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::Control => self.instrs.push(Instr::LoadControl(reg_index)),
             Expr::Suspend(expr) => {
                 self.compile_expr(*expr)?;
-                self.instrs.push(Instr::Suspend(reg_index))
+                self.instrs.push(Instr::Suspend(reg_index));
+                self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::Resume(expr) => {
                 self.compile_expr(*expr)?;
-                self.instrs.push(Instr::Resume(reg_index))
+                self.instrs.push(Instr::Resume(reg_index));
+                self.instrs.push(Instr::LoadUnit(reg_index))
             }
         }
         self.reg_index = reg_index;
