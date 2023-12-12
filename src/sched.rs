@@ -1,12 +1,13 @@
 use std::{
     collections::HashMap,
+    iter::repeat,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst},
         Arc,
     },
 };
 
-use crossbeam_channel::{select, Receiver, Sender};
+use crossbeam_channel::{select, unbounded, Receiver, Sender};
 
 use crate::{value::ValueType, Evaluator};
 
@@ -18,10 +19,9 @@ pub struct Scheduler {
     suspend_rx: Receiver<(ControlId, Evaluator)>,
     suspend_tasks: HashMap<ControlId, Vec<Evaluator>>,
     resume_rx: Receiver<ControlId>,
-    stop_rx: Receiver<()>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Worker {
     ready_rx: Receiver<Evaluator>,
     ready_tx: Sender<Evaluator>, // for spawning
@@ -29,7 +29,6 @@ pub struct Worker {
     resume_tx: Sender<ControlId>,
     control_id: Arc<AtomicU64>,
     task_count: Arc<AtomicUsize>,
-    stop_tx: Sender<()>,
     suspend_control: Option<ControlId>,
 }
 
@@ -45,7 +44,7 @@ impl ValueType for Control {
 }
 
 impl Scheduler {
-    pub fn run(&mut self) -> anyhow::Result<()> {
+    pub fn run(&mut self, stop_rx: Receiver<()>) -> anyhow::Result<()> {
         loop {
             enum Select {
                 Stop(()),
@@ -53,7 +52,7 @@ impl Scheduler {
                 Resume(ControlId),
             }
             match select! {
-                recv(self.stop_rx) -> msg => Select::Stop(msg?),
+                recv(stop_rx) -> msg => Select::Stop(msg?),
                 recv(self.suspend_rx) -> msg => Select::Suspend(msg?),
                 recv(self.resume_rx) -> msg => Select::Resume(msg?),
             } {
@@ -75,20 +74,21 @@ impl Scheduler {
 }
 
 impl Worker {
-    pub fn run(&mut self) -> anyhow::Result<()> {
-        while let Ok(task) = self.ready_rx.recv() {
-            //
+    pub fn run(&mut self, stop_rx: Receiver<()>) -> anyhow::Result<()> {
+        loop {
+            let mut task = select! {
+                recv(stop_rx) -> msg => break Ok(msg?),
+                recv(self.ready_rx) -> msg => msg?,
+            };
+            task.eval(self)?;
             if let Some(control_id) = self.suspend_control.take() {
                 self.suspend_tx
                     .send((control_id, task))
                     .map_err(|_| anyhow::anyhow!("disconnected"))?
             } else if self.task_count.fetch_sub(1, SeqCst) == 1 {
-                self.stop_tx
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("disconnected"))?
+                break Ok(());
             }
         }
-        Ok(())
     }
 
     pub fn spawn(&self, task: Evaluator) -> anyhow::Result<()> {
@@ -126,4 +126,27 @@ impl Control {
         }
         Ok(())
     }
+}
+
+pub fn new_system(evaluator: Evaluator) -> (Scheduler, impl Iterator<Item = Worker>) {
+    let (ready_tx, ready_rx) = unbounded();
+    let (suspend_tx, suspend_rx) = unbounded();
+    let (resume_tx, resume_rx) = unbounded();
+    ready_tx.send(evaluator).unwrap();
+    let scheduler = Scheduler {
+        ready_tx: ready_tx.clone(),
+        suspend_rx,
+        suspend_tasks: Default::default(),
+        resume_rx,
+    };
+    let workers = repeat(Worker {
+        ready_rx,
+        ready_tx,
+        suspend_tx,
+        resume_tx,
+        control_id: Default::default(),
+        task_count: Arc::new(AtomicUsize::new(1)),
+        suspend_control: None,
+    });
+    (scheduler, workers)
 }

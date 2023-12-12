@@ -10,6 +10,7 @@ use crate::{
     ast::Operator,
     compile::{Chunk, ChunkIndex, Compiler, Const, Instr, RegIndex, Symbol},
     gc::Allocator,
+    sched::Worker,
     value::{self, Record},
     Value,
 };
@@ -91,12 +92,17 @@ impl EvaluatorConsts {
         this.link("repr", Evaluator::intrinsic_repr);
         this.link("panic", Evaluator::intrinsic_panic);
         value::link(&mut this);
+        assert!(
+            this.lang_indexes.is_empty(),
+            "language items not linked: {:?}",
+            this.lang_indexes
+        );
         this
     }
 
     pub fn link(&mut self, name: &str, intrinsic: Intrinsic) -> bool {
-        if let Some(index) = self.lang_indexes.get(name) {
-            self.intrinsics.insert(*index, intrinsic);
+        if let Some(index) = self.lang_indexes.remove(name) {
+            self.intrinsics.insert(index, intrinsic);
             true
         } else {
             false
@@ -137,13 +143,16 @@ impl IndexMut<&RegIndex> for I<'_> {
 }
 
 impl Evaluator {
-    pub fn eval_chunk(&mut self, chunk_index: usize) -> anyhow::Result<()> {
-        let frame = Frame {
+    pub fn push_entry_frame(&mut self, chunk_index: usize) {
+        assert!(self.frames.is_empty());
+        self.frames.push(Frame {
             chunk_index,
             base_pointer: 0,
             instr_pointer: 0,
-        };
-        self.frames.push(frame);
+        })
+    }
+
+    pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
         while let Some(frame) = self.frames.last_mut() {
             let chunk = &self.consts.chunks[frame.chunk_index];
             let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {

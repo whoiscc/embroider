@@ -22,6 +22,8 @@ pub struct Allocator {
     link: *mut Object,
 }
 
+unsafe impl Send for Allocator {}
+
 impl Default for Allocator {
     fn default() -> Self {
         Self { link: null_mut() }

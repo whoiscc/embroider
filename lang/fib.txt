@@ -2,7 +2,7 @@ with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 Instant = {
-    new: func() lang instant_new ()
+    now: func() lang instant_now ()
     elapsed: func(a) lang instant_elapsed ()
 }
 
@@ -11,7 +11,7 @@ fib = func(n) capture { fib } match n < 2
     | {False} fib(n - 1) + fib(n - 2) (
 fib capture { fib: fib }
 
-with start = Instant.new() (
+with start = Instant.now() (
 print(repr(fib(10)))
 print(repr(fib(35) == 9227465))
 print(repr(Instant.elapsed(start)))
