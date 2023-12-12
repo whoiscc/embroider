@@ -4,15 +4,15 @@ pub mod ast;
 pub mod compile;
 pub mod eval;
 pub mod gc;
+pub mod sched;
 pub mod value;
-
-use gc::Allocator;
 
 pub use crate::compile::Compiler;
 pub use crate::eval::Evaluator;
 pub use crate::value::Value;
 
 use crate::compile::CompileError;
+use crate::gc::Allocator;
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args()

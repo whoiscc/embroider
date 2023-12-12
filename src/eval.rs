@@ -3,6 +3,7 @@ use std::{
     error::Error,
     fmt::Display,
     ops::{Index, IndexMut},
+    sync::Arc,
 };
 
 use crate::{
@@ -15,19 +16,22 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Evaluator {
+    consts: Arc<EvaluatorConsts>,
+    pub allocator: Allocator,
+    pub registers: Vec<Value>,
+    pub intrinsic_base_pointer: usize,
+    frames: Vec<Frame>,
+}
+
+#[derive(Debug)]
+pub struct EvaluatorConsts {
     chunks: Vec<Chunk>,
     lang_indexes: HashMap<String, ChunkIndex>,
     symbols: Vec<String>,
-    pub allocator: Allocator,
-
     intrinsics: HashMap<ChunkIndex, Intrinsic>,
     symbol_chunk: Symbol,
     symbol_true: Symbol,
     symbol_false: Symbol,
-
-    pub registers: Vec<Value>,
-    pub intrinsic_base_pointer: usize,
-    frames: Vec<Frame>,
 }
 
 type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
@@ -61,9 +65,20 @@ impl Display for EvalError {
 impl Error for EvalError {}
 
 impl Evaluator {
-    pub fn new(mut compiler: Compiler, allocator: Allocator) -> Self {
-        let mut this = Self {
+    pub fn new(compiler: Compiler, allocator: Allocator) -> Self {
+        Self {
+            consts: Arc::new(EvaluatorConsts::new(compiler)),
             allocator,
+            registers: Default::default(),
+            frames: Default::default(),
+            intrinsic_base_pointer: 0,
+        }
+    }
+}
+
+impl EvaluatorConsts {
+    fn new(mut compiler: Compiler) -> Self {
+        let mut this = Self {
             symbol_chunk: compiler.intern("%chunk".into()),
             symbol_true: compiler.intern("True".into()),
             symbol_false: compiler.intern("False".into()),
@@ -71,13 +86,10 @@ impl Evaluator {
             symbols: compiler.symbols,
             lang_indexes: compiler.lang_indexes,
             intrinsics: Default::default(),
-            registers: Default::default(),
-            frames: Default::default(),
-            intrinsic_base_pointer: 0,
         };
-        this.link("print", Self::intrinsic_print);
-        this.link("repr", Self::intrinsic_repr);
-        this.link("panic", Self::intrinsic_panic);
+        this.link("print", Evaluator::intrinsic_print);
+        this.link("repr", Evaluator::intrinsic_repr);
+        this.link("panic", Evaluator::intrinsic_panic);
         value::link(&mut this);
         this
     }
@@ -133,7 +145,7 @@ impl Evaluator {
         };
         self.frames.push(frame);
         while let Some(frame) = self.frames.last_mut() {
-            let chunk = &self.chunks[frame.chunk_index];
+            let chunk = &self.consts.chunks[frame.chunk_index];
             let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {
                 assert_eq!(frame.instr_pointer, chunk.instrs.len());
                 self.frames.pop().unwrap();
@@ -167,7 +179,7 @@ impl Evaluator {
                 }
                 Instr::LoadChunk(i, chunk_index) => {
                     let mut record = HashMap::new();
-                    record.insert(self.symbol_chunk, Value::ChunkIndex(*chunk_index));
+                    record.insert(self.consts.symbol_chunk, Value::ChunkIndex(*chunk_index));
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
                 Instr::LoadField(i, j, symbol) => {
@@ -176,7 +188,7 @@ impl Evaluator {
                         r[i] = value.clone()
                     } else {
                         Err(err(EvalErrorKind::RecordKeyError(
-                            self.symbols[*symbol].clone(),
+                            self.consts.symbols[*symbol].clone(),
                         )))?
                     }
                 }
@@ -184,9 +196,9 @@ impl Evaluator {
                     let value = r[j].clone();
                     let ri = r[i].downcast_mut::<Record>().map_err(err)?;
                     let evicted = ri.insert(*symbol, value);
-                    if evicted.is_none() && !ri.contains_key(&self.symbol_chunk) {
+                    if evicted.is_none() && !ri.contains_key(&self.consts.symbol_chunk) {
                         Err(err(EvalErrorKind::RecordKeyError(
-                            self.symbols[*symbol].clone(),
+                            self.consts.symbols[*symbol].clone(),
                         )))?
                     }
                 }
@@ -266,19 +278,20 @@ impl Evaluator {
                 }
                 Instr::Apply(i, arity) => {
                     let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.symbol_chunk) else {
+                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.consts.symbol_chunk)
+                    else {
                         Err(err(EvalErrorKind::TypeError(
                             "Record".into(),
                             "(Abstraction)".into(),
                         )))?
                     };
-                    if *arity != self.chunks[*chunk_index].arity {
+                    if *arity != self.consts.chunks[*chunk_index].arity {
                         Err(err(EvalErrorKind::ArityError(
                             *arity,
-                            self.chunks[*chunk_index].arity,
+                            self.consts.chunks[*chunk_index].arity,
                         )))?
                     }
-                    if let Some(intrinsic) = self.intrinsics.get(chunk_index) {
+                    if let Some(intrinsic) = self.consts.intrinsics.get(chunk_index) {
                         self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
                         intrinsic(self).map_err(err)?
                     } else {
@@ -294,13 +307,13 @@ impl Evaluator {
                 Instr::MatchField(i, symbol, instr) => {
                     let matched = if let Value::Bool(b) = r[i] {
                         if b {
-                            *symbol == self.symbol_true
+                            *symbol == self.consts.symbol_true
                         } else {
-                            *symbol == self.symbol_false
+                            *symbol == self.consts.symbol_false
                         }
                     } else {
                         let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                        if ri.contains_key(&self.symbol_chunk) {
+                        if ri.contains_key(&self.consts.symbol_chunk) {
                             Err(err(EvalErrorKind::TypeError(
                                 "(Abstraction)".into(),
                                 "Record".into(),

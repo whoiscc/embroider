@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     compile::Symbol,
-    eval::{EvalErrorKind, I},
+    eval::{EvalErrorKind, EvaluatorConsts, I},
     gc::Addr,
     Evaluator,
 };
@@ -262,7 +262,7 @@ impl Instant {
     }
 }
 
-pub fn link(evaluator: &mut Evaluator) {
+pub fn link(evaluator: &mut EvaluatorConsts) {
     evaluator.link("value_u64", Value::intrinsic_u64);
     evaluator.link("instant_now", Instant::intrinsic_now);
     evaluator.link("instant_elapsed", Instant::intrinsic_elapsed);
