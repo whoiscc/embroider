@@ -29,6 +29,11 @@ pub enum Instr {
 
     MatchField(RegIndex, Symbol, InstrIndex),
     Jump(InstrIndex),
+
+    Spawn(RegIndex),
+    LoadControl(RegIndex),
+    Suspend(RegIndex),
+    Resume(RegIndex),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

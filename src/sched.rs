@@ -9,7 +9,9 @@ use std::{
 
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
 
-use crate::{value::ValueType, Evaluator};
+use crate::{
+    compile::ChunkIndex, eval::EvaluatorConsts, gc::Allocator, value::ValueType, Evaluator, Value,
+};
 
 type ControlId = u64;
 
@@ -30,6 +32,7 @@ pub struct Worker {
     control_id: Arc<AtomicU64>,
     task_count: Arc<AtomicUsize>,
     suspend_control: Option<ControlId>,
+    eval_consts: Arc<EvaluatorConsts>,
 }
 
 #[derive(Debug)]
@@ -91,8 +94,11 @@ impl Worker {
         }
     }
 
-    pub fn spawn(&self, task: Evaluator) -> anyhow::Result<()> {
+    pub fn spawn(&self, chunk_index: ChunkIndex, closure_value: Value) -> anyhow::Result<()> {
         self.task_count.fetch_add(1, SeqCst);
+        let mut task = Evaluator::new(self.eval_consts.clone(), Allocator::default());
+        task.push_entry_frame(chunk_index);
+        task.push_entry_value(closure_value);
         self.ready_tx
             .send(task)
             .map_err(|_| anyhow::anyhow!("disconnected"))
@@ -128,11 +134,19 @@ impl Control {
     }
 }
 
-pub fn new_system(evaluator: Evaluator) -> (Scheduler, impl Iterator<Item = Worker>) {
+pub fn new_system(
+    eval_consts: impl Into<Arc<EvaluatorConsts>>,
+    chunk_index: ChunkIndex,
+) -> (Scheduler, impl Iterator<Item = Worker>) {
     let (ready_tx, ready_rx) = unbounded();
     let (suspend_tx, suspend_rx) = unbounded();
     let (resume_tx, resume_rx) = unbounded();
-    ready_tx.send(evaluator).unwrap();
+
+    let eval_consts = eval_consts.into();
+    let mut task = Evaluator::new(eval_consts.clone(), Allocator::default());
+    task.push_entry_frame(chunk_index);
+    ready_tx.send(task).unwrap();
+
     let scheduler = Scheduler {
         ready_tx: ready_tx.clone(),
         suspend_rx,
@@ -146,6 +160,7 @@ pub fn new_system(evaluator: Evaluator) -> (Scheduler, impl Iterator<Item = Work
         resume_tx,
         control_id: Default::default(),
         task_count: Arc::new(AtomicUsize::new(1)),
+        eval_consts,
         suspend_control: None,
     });
     (scheduler, workers)

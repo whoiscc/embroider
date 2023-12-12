@@ -10,7 +10,7 @@ use crate::{
     ast::Operator,
     compile::{Chunk, ChunkIndex, Compiler, Const, Instr, RegIndex, Symbol},
     gc::Allocator,
-    sched::Worker,
+    sched::{Control, Worker},
     value::{self, Record},
     Value,
 };
@@ -54,6 +54,7 @@ pub enum EvalErrorKind {
     Operator2TypeError(Operator, String, String),
     Operator1TypeError(Operator, String),
     ArityError(usize, usize),
+    SpawnIntrinsicError(ChunkIndex),
     Panic(String),
 }
 
@@ -66,9 +67,9 @@ impl Display for EvalError {
 impl Error for EvalError {}
 
 impl Evaluator {
-    pub fn new(compiler: Compiler, allocator: Allocator) -> Self {
+    pub fn new(consts: Arc<EvaluatorConsts>, allocator: Allocator) -> Self {
         Self {
-            consts: Arc::new(EvaluatorConsts::new(compiler)),
+            consts,
             allocator,
             registers: Default::default(),
             frames: Default::default(),
@@ -78,7 +79,7 @@ impl Evaluator {
 }
 
 impl EvaluatorConsts {
-    fn new(mut compiler: Compiler) -> Self {
+    pub fn new(mut compiler: Compiler) -> Self {
         let mut this = Self {
             symbol_chunk: compiler.intern("%chunk".into()),
             symbol_true: compiler.intern("True".into()),
@@ -150,6 +151,11 @@ impl Evaluator {
             base_pointer: 0,
             instr_pointer: 0,
         })
+    }
+
+    pub fn push_entry_value(&mut self, value: Value) {
+        assert!(self.registers.is_empty());
+        self.registers.push(value)
     }
 
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
@@ -335,6 +341,39 @@ impl Evaluator {
                     }
                 }
                 Instr::Jump(instr) => frame.instr_pointer = *instr,
+                Instr::Spawn(i) => {
+                    let ri = r[i].downcast_ref::<Record>().map_err(err)?;
+                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.consts.symbol_chunk)
+                    else {
+                        Err(err(EvalErrorKind::TypeError(
+                            "Record".into(),
+                            "(Abstraction)".into(),
+                        )))?
+                    };
+                    if self.consts.chunks[*chunk_index].arity != 0 {
+                        Err(err(EvalErrorKind::ArityError(
+                            self.consts.chunks[*chunk_index].arity,
+                            0,
+                        )))?
+                    }
+                    if self.consts.intrinsics.contains_key(chunk_index) {
+                        Err(err(EvalErrorKind::SpawnIntrinsicError(*chunk_index)))?
+                    }
+                    worker.spawn(*chunk_index, r[i].clone())?
+                }
+                Instr::LoadControl(i) => {
+                    r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
+                }
+                Instr::Suspend(i) => {
+                    let ri = r[i].downcast_ref::<Control>().map_err(err)?;
+                    if worker.suspend(ri) {
+                        break;
+                    }
+                }
+                Instr::Resume(i) => {
+                    let ri = r[i].downcast_ref::<Control>().map_err(err)?;
+                    ri.resume()?
+                }
             }
             // println!("{:?}", self.registers);
         }

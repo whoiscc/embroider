@@ -15,7 +15,7 @@ use std::thread::{spawn, JoinHandle};
 use std::{fs::File, io::Write, path::Path};
 
 use crate::compile::CompileError;
-use crate::gc::Allocator;
+use crate::eval::EvaluatorConsts;
 use crate::sched::new_system;
 
 fn main() -> anyhow::Result<()> {
@@ -44,9 +44,7 @@ fn main() -> anyhow::Result<()> {
     for chunk_index in 0..compiler.chunks.len() {
         writeln!(instr_out, "{}", compiler.disassemble(chunk_index))?
     }
-    let mut evaluator = Evaluator::new(compiler, Allocator::default());
-    evaluator.push_entry_frame(chunk_index);
-    let (mut scheduler, workers) = new_system(evaluator);
+    let (mut scheduler, workers) = new_system(EvaluatorConsts::new(compiler), chunk_index);
 
     let n = std::thread::available_parallelism()?.get();
     let group = StopGroup::new(n);
