@@ -392,6 +392,19 @@ impl Compiler {
                 .push(Instr::Jump(self.continue_jump_index.ok_or(
                     CompileError(CompileErrorKind::ContinueOutsideLoop, offset),
                 )?)),
+            Expr::Spawn(expr) => {
+                self.compile_expr(*expr)?;
+                self.instrs.push(Instr::Spawn(reg_index))
+            }
+            Expr::Control => self.instrs.push(Instr::LoadControl(reg_index)),
+            Expr::Suspend(expr) => {
+                self.compile_expr(*expr)?;
+                self.instrs.push(Instr::Suspend(reg_index))
+            }
+            Expr::Resume(expr) => {
+                self.compile_expr(*expr)?;
+                self.instrs.push(Instr::Resume(reg_index))
+            }
         }
         self.reg_index = reg_index;
         Ok(())

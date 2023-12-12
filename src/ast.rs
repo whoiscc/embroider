@@ -24,6 +24,11 @@ pub enum Expr {
 
     Match(Match),
     Loop(Box<ExprO>),
+
+    Spawn(Box<ExprO>),
+    Control,
+    Suspend(Box<ExprO>),
+    Resume(Box<ExprO>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +139,10 @@ peg::parser! {
             "return" _ e:boxed_expr() { Expr::Return(e) }
             "break" { Expr::Break }
             "continue" { Expr::Continue }
+            "spawn" _ e:boxed_expr() { Expr::Spawn(e) }
+            "control" { Expr::Control }
+            "suspend" _ e:boxed_expr() { Expr::Suspend(e) }
+            "resume" _ e:boxed_expr() { Expr::Resume(e) }
             e:variable() { Expr::Variable(e) }
         }
 
