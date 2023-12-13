@@ -1,7 +1,7 @@
 use std::thread::{spawn, JoinHandle};
 use std::{fs::File, io::Write, path::Path};
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use embroider::{ast, Compiler};
 use embroider::{compile::CompileError, eval::EvaluatorConsts, sched::new_system};
@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
         .ok_or(anyhow::anyhow!("no file name provided"))?;
     let path = <_ as AsRef<Path>>::as_ref(&path);
     let source = std::fs::read_to_string(path)?;
-    let expr = ast::parse::program(&source)?;
+    let expr = ast::parse::expr(&source)?;
     let mut ast_out = File::create(path.with_extension("ast.txt"))?;
     writeln!(ast_out, "{expr:#?}")?;
     let mut compiler = Compiler::default();
@@ -36,12 +36,12 @@ fn main() -> anyhow::Result<()> {
     embroider_std::link(&mut eval_consts);
     let workers = new_system(eval_consts, chunk_index);
 
-    let n = std::thread::available_parallelism()?.get();
-    let group = StopGroup::new(n - 1);
+    let group = StopGroup::new();
     let workers = workers
         .map(|mut worker| group.spawn(move |stop_rx| worker.run(stop_rx)))
         .take(std::thread::available_parallelism()?.get())
         .collect::<Vec<_>>();
+    drop(group);
     for worker in workers {
         worker.join().unwrap()?
     }
@@ -52,13 +52,12 @@ fn main() -> anyhow::Result<()> {
 struct StopGroup {
     tx: Sender<()>,
     rx: Receiver<()>,
-    n: usize,
 }
 
 impl StopGroup {
-    fn new(n: usize) -> Self {
-        let (tx, rx) = unbounded();
-        Self { tx, rx, n }
+    fn new() -> Self {
+        let (tx, rx) = bounded(0);
+        Self { tx, rx }
     }
 
     fn spawn(
@@ -68,9 +67,7 @@ impl StopGroup {
         let this = self.clone();
         spawn(move || {
             let result = task(this.rx);
-            for _ in 0..this.n {
-                this.tx.send(()).unwrap()
-            }
+            while this.tx.send(()).is_ok() {}
             result
         })
     }

@@ -300,7 +300,7 @@ impl Compiler {
             Expr::Mut(name, expr) => {
                 self.compile_expr(*expr)?;
                 let resolved = self
-                    .resolve(name.clone(), false)
+                    .resolve(name, false)
                     .map_err(|kind| CompileError(kind, offset))?;
                 self.instrs.push(Instr::Move(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
@@ -314,15 +314,16 @@ impl Compiler {
                     .push(Instr::StoreField(reg_index, symbol, self.reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
-            Expr::Capture(expr, record) => {
-                self.compile_expr(*expr)?;
-                self.reg_index += 1;
-                for (name, expr) in record {
-                    self.compile_expr(expr)?;
-                    let symbol = self.intern(name);
-                    self.instrs
-                        .push(Instr::StoreField(reg_index, symbol, reg_index + 1))
-                }
+            Expr::Capture(name, variable) => {
+                let resolved = self
+                    .resolve(name, false)
+                    .map_err(|kind| CompileError(kind, offset))?;
+                let resolved_variable = self
+                    .resolve(variable.clone(), false)
+                    .map_err(|kind| CompileError(kind, offset))?;
+                let symbol = self.intern(variable);
+                self.instrs
+                    .push(Instr::StoreField(resolved, symbol, resolved_variable))
             }
             Expr::Match(matching) => {
                 self.compile_expr(*matching.variant)?;

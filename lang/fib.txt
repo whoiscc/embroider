@@ -6,10 +6,12 @@ Instant = {
     elapsed: func(a) lang instant_elapsed ()
 }
 
-fib = func(n) capture { fib } match n < 2
+fib = func(n)
+    capture fib 
+    match n < 2
     | {True} n
     | {False} fib(n - 1) + fib(n - 2) (
-fib capture { fib: fib }
+fib capture fib
 
 with start = Instant.now() (
 print(repr(fib(10)))

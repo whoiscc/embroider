@@ -50,7 +50,8 @@ pub struct EvalError(pub EvalErrorKind, pub ChunkIndex, pub usize);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalErrorKind {
     TypeError(String, String),
-    RecordKeyError(String),
+    FieldError(String),
+    CaptureError(String),
     Operator2TypeError(Operator, String, String),
     Operator1TypeError(Operator, String),
     ArityError(usize, usize),
@@ -193,27 +194,33 @@ impl Evaluator {
                         .collect::<Record>();
                     r[i] = Value::Dyn(self.allocator.alloc(record))
                 }
-                Instr::LoadChunk(i, chunk_index) => {
-                    let mut record = HashMap::new();
-                    record.insert(self.consts.symbol_chunk, Value::ChunkIndex(*chunk_index));
-                    r[i] = Value::Dyn(self.allocator.alloc(record))
-                }
+                Instr::LoadChunk(i, chunk_index) => r[i] = Value::ChunkIndex(*chunk_index),
                 Instr::LoadField(i, j, symbol) => {
                     let rj = r[j].downcast_ref::<Record>().map_err(err)?;
                     if let Some(value) = rj.get(symbol) {
                         r[i] = value.clone()
                     } else {
-                        Err(err(EvalErrorKind::RecordKeyError(
-                            self.consts.symbols[*symbol].clone(),
+                        Err(err(if rj.contains_key(&self.consts.symbol_chunk) {
+                            EvalErrorKind::CaptureError
+                        } else {
+                            EvalErrorKind::FieldError
+                        }(
+                            self.consts.symbols[*symbol].clone()
                         )))?
                     }
                 }
                 Instr::StoreField(i, symbol, j) => {
-                    let value = r[j].clone();
+                    if matches!(r[i], Value::ChunkIndex(_)) {
+                        // println!("chunk -> closure");
+                        let mut record = HashMap::new();
+                        record.insert(self.consts.symbol_chunk, r[i].clone());
+                        r[i] = Value::Dyn(self.allocator.alloc(record));
+                    }
+                    let rj = r[j].clone();
                     let ri = r[i].downcast_mut::<Record>().map_err(err)?;
-                    let evicted = ri.insert(*symbol, value);
+                    let evicted = ri.insert(*symbol, rj);
                     if evicted.is_none() && !ri.contains_key(&self.consts.symbol_chunk) {
-                        Err(err(EvalErrorKind::RecordKeyError(
+                        Err(err(EvalErrorKind::FieldError(
                             self.consts.symbols[*symbol].clone(),
                         )))?
                     }
@@ -293,26 +300,33 @@ impl Evaluator {
                     }
                 }
                 Instr::Apply(i, arity) => {
-                    let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.consts.symbol_chunk)
-                    else {
-                        Err(err(EvalErrorKind::TypeError(
-                            "Record".into(),
-                            "(Abstraction)".into(),
-                        )))?
+                    let chunk_index = if let Value::ChunkIndex(index) = r[i] {
+                        // println!("apply simple chunk");
+                        index
+                    } else {
+                        let ri = r[i].downcast_ref::<Record>().map_err(err)?;
+                        if let Some(Value::ChunkIndex(index)) = ri.get(&self.consts.symbol_chunk) {
+                            // println!("apply closure");
+                            *index
+                        } else {
+                            Err(err(EvalErrorKind::TypeError(
+                                "Record".into(),
+                                "(Abstraction)".into(),
+                            )))?
+                        }
                     };
-                    if *arity != self.consts.chunks[*chunk_index].arity {
+                    if *arity != self.consts.chunks[chunk_index].arity {
                         Err(err(EvalErrorKind::ArityError(
                             *arity,
-                            self.consts.chunks[*chunk_index].arity,
+                            self.consts.chunks[chunk_index].arity,
                         )))?
                     }
-                    if let Some(intrinsic) = self.consts.intrinsics.get(chunk_index) {
+                    if let Some(intrinsic) = self.consts.intrinsics.get(&chunk_index) {
                         self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
                         intrinsic(self).map_err(err)?
                     } else {
                         let frame = Frame {
-                            chunk_index: *chunk_index,
+                            chunk_index,
                             base_pointer: frame.base_pointer + *i as usize,
                             instr_pointer: 0,
                         };

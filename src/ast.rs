@@ -16,7 +16,7 @@ pub enum Expr {
 
     Mut(String, Box<ExprO>),
     MutField(Box<ExprO>, String, Box<ExprO>),
-    Capture(Box<ExprO>, Vec<(String, ExprO)>),
+    Capture(String, String),
 
     Return(Box<ExprO>),
     Break,
@@ -87,15 +87,13 @@ pub enum Operator {
 
 peg::parser! {
     pub grammar parse() for str {
-        pub rule program() -> ExprO = e:expr() _ { e }
-
         rule boxed_expr() -> Box<ExprO> = e:expr() { Box::new(e) }
-        rule expr() -> ExprO = precedence! {
+        pub rule expr() -> ExprO = precedence! {
             p:position!() e:@ _:position!() { (e, p) }
             --
             e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
             v:variable() _ "mut" _ m:boxed_expr() { Expr::Mut(v, m) }
-            e:@ _ "capture" _ r:record() { Expr::Capture(Box::new(e), r) }
+            v:variable() _ "capture" _ c:variable() { Expr::Capture(v, c) }
             --
             e:(@) _ "or" _ x:@ { Expr::Operator(Operator::Or, vec![e, x]) }
             --
@@ -163,7 +161,7 @@ peg::parser! {
             = "func"
             _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
             _ l:("lang" _ l:variable() { l })?
-            _ cs:("capture" _ "{" _ vs:optional_delimited(<variable()>, <",">) _ "}" { vs } / { Vec::new() })
+            _ cs:("capture" _ v:variable() { v })*
             _ e:boxed_expr()
             { Abstraction { variables: vs, captures: cs, lang: l, expr: e } }
 
