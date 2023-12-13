@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
         .ok_or(anyhow::anyhow!("no file name provided"))?;
     let path = <_ as AsRef<Path>>::as_ref(&path);
     let source = std::fs::read_to_string(path)?;
-    let expr = ast::parse::expr(&source)?;
+    let expr = ast::parse::program(&source)?;
     let mut ast_out = File::create(path.with_extension("ast.txt"))?;
     writeln!(ast_out, "{expr:#?}")?;
     let mut compiler = Compiler::default();

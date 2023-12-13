@@ -2,7 +2,7 @@ with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 Instant = {
-    new: func() lang instant_new ()
+    now: func() lang instant_now ()
     elapsed: func(a) lang instant_elapsed ()
 }
 some = func(value) {Some: value}
@@ -18,7 +18,8 @@ tree = with
     m_class = tree_class(m) (
     m mut.class m_class
 
-    with tree = func(item, depth) capture { tree }
+    with tree = func(item, depth) 
+        capture tree
         with rep = match depth > 0
             | {True} with
                 item2 = item + item
@@ -29,17 +30,15 @@ tree = with
             | {False}
                 { item: item, depth: depth, left: none, right: none } (
         m_class(rep)
-    ) (
-        tree capture { tree: tree }
-        tree
-    )
+    ) 
+    (tree)
 )
 
 min_depth = 4
 max_depth = 14
 stretch_depth = max_depth + 1
 
-start = Instant.new() (
+start = Instant.now() (
 print("stretch tree of depth " + repr(stretch_depth))
 print("check: " + repr(tree(0, stretch_depth).check()))
 

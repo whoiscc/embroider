@@ -63,6 +63,7 @@ pub struct Compiler {
     scopes: Vec<HashMap<String, RegIndex>>,
     capture_scopes: Vec<HashMap<String, RegIndex>>,
     captures: HashSet<String>,
+    forward_captures: HashMap<String, Vec<RegIndex>>,
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
@@ -177,12 +178,15 @@ impl Compiler {
                 let saved_scopes = take(&mut self.scopes);
                 let saved_capture_scopes = self.capture_scopes.clone();
                 self.capture_scopes.extend(saved_scopes.clone());
-                let explicit_captures = abstraction
-                    .captures
-                    .into_iter()
-                    .map(|name| (name, RegIndex::MAX))
-                    .collect::<HashMap<_, _>>();
-                self.capture_scopes.push(explicit_captures.clone());
+                let mut forward_scope = HashMap::new();
+                for name in abstraction.captures {
+                    forward_scope.insert(name.clone(), RegIndex::MAX);
+                    self.forward_captures
+                        .entry(name)
+                        .or_default()
+                        .push(reg_index)
+                }
+                self.capture_scopes.push(forward_scope.clone());
                 let mut scope = HashMap::new();
                 let mut i = 1; // reserve register 0 for the "closure object"
                 for name in abstraction.variables {
@@ -227,7 +231,7 @@ impl Compiler {
                 // println!("{} {:?}", chunk_index, self.quasi_scope);
                 // println!("{:?}", self.captures);
                 for name in replace(&mut self.captures, saved_captures) {
-                    if explicit_captures.contains_key(&name) {
+                    if forward_scope.contains_key(&name) {
                         continue;
                     }
                     let symbol = self.intern(name.clone());
@@ -253,6 +257,7 @@ impl Compiler {
             }
             Expr::Scoped(scoped) => {
                 let saved_scopes = self.scopes.clone();
+                let saved_forward_captures = take(&mut self.forward_captures);
                 for scope_decls in scoped.decls {
                     let saved_description_hint = take(&mut self.description_hint);
                     self.scopes.push(Default::default());
@@ -260,6 +265,11 @@ impl Compiler {
                         self.description_hint = name.clone();
                         // println!("before {name}: {:?}", self.quasi_scope);
                         self.compile_expr(expr)?;
+                        let symbol = self.intern(name.clone());
+                        for reg_index in self.forward_captures.remove(&name).unwrap_or_default() {
+                            self.instrs
+                                .push(Instr::StoreField(reg_index, symbol, reg_index))
+                        }
                         self.scopes.last_mut().unwrap().insert(name, self.reg_index);
                         self.reg_index += 1
                     }
@@ -274,6 +284,7 @@ impl Compiler {
                     self.instrs.push(Instr::LoadUnit(self.reg_index))
                 }
                 self.scopes = saved_scopes;
+                self.forward_captures = saved_forward_captures;
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
             Expr::Operator(op, exprs) => {

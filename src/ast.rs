@@ -87,8 +87,11 @@ pub enum Operator {
 
 peg::parser! {
     pub grammar parse() for str {
+        // for trailing comment
+        pub rule program() -> ExprO = e:expr() _ { e }
+
         rule boxed_expr() -> Box<ExprO> = e:expr() { Box::new(e) }
-        pub rule expr() -> ExprO = precedence! {
+        rule expr() -> ExprO = precedence! {
             p:position!() e:@ _:position!() { (e, p) }
             --
             e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
@@ -161,7 +164,7 @@ peg::parser! {
             = "func"
             _ "(" _ vs:optional_delimited(<variable()>, <",">) _ ")"
             _ l:("lang" _ l:variable() { l })?
-            _ cs:("capture" _ v:variable() { v })*
+            _ cs:("capture" _ v:variable() _ { v })*
             _ e:boxed_expr()
             { Abstraction { variables: vs, captures: cs, lang: l, expr: e } }
 
