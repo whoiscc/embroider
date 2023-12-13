@@ -258,23 +258,21 @@ impl Compiler {
             Expr::Scoped(scoped) => {
                 let saved_scopes = self.scopes.clone();
                 let saved_forward_captures = take(&mut self.forward_captures);
-                for scope_decls in scoped.decls {
-                    let saved_description_hint = take(&mut self.description_hint);
-                    self.scopes.push(Default::default());
-                    for (name, expr) in scope_decls {
-                        self.description_hint = name.clone();
-                        // println!("before {name}: {:?}", self.quasi_scope);
-                        self.compile_expr(expr)?;
-                        let symbol = self.intern(name.clone());
-                        for reg_index in self.forward_captures.remove(&name).unwrap_or_default() {
-                            self.instrs
-                                .push(Instr::StoreField(reg_index, symbol, reg_index))
-                        }
-                        self.scopes.last_mut().unwrap().insert(name, self.reg_index);
-                        self.reg_index += 1
+                let saved_description_hint = take(&mut self.description_hint);
+                self.scopes.push(Default::default());
+                for (name, expr) in scoped.decls {
+                    self.description_hint = name.clone();
+                    // println!("before {name}: {:?}", self.quasi_scope);
+                    self.compile_expr(expr)?;
+                    let symbol = self.intern(name.clone());
+                    for reg_index in self.forward_captures.remove(&name).unwrap_or_default() {
+                        self.instrs
+                            .push(Instr::StoreField(reg_index, symbol, reg_index))
                     }
-                    self.description_hint = saved_description_hint;
+                    self.scopes.last_mut().unwrap().insert(name, self.reg_index);
+                    self.reg_index += 1
                 }
+                self.description_hint = saved_description_hint;
                 for expr in scoped.exprs {
                     self.compile_expr(expr)?
                 }

@@ -16,7 +16,7 @@ pub enum Expr {
 
     Mut(String, Box<ExprO>),
     MutField(Box<ExprO>, String, Box<ExprO>),
-    Capture(String, String),
+    Capture(String, String), // currently unused
 
     Return(Box<ExprO>),
     Break,
@@ -41,15 +41,7 @@ pub struct Abstraction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoped {
-    // a relatively compact representation, outer layer list for list of `with`, and inner layer
-    // list for "concurrent" declarations from each `with`. so
-    //     with a = ...
-    //     with b = ..., c = ... (expr)
-    // will be [[(a, ...)], [(b, ...), (c, ...)]]
-    // there was a time where `with` is prepended to decalarations whenever possible, and this
-    // compacted representation can avoid terribly deep nested AST
-    // this does not cause problem after i revert the coding style, so just save it in case needed
-    pub decls: Vec<Vec<(String, ExprO)>>,
+    pub decls: Vec<(String, ExprO)>,
     pub exprs: Vec<ExprO>,
     pub value_expr: Option<Box<ExprO>>,
 }
@@ -68,7 +60,7 @@ pub enum Operator {
     Div,
     Rem,
     Neg,
-    
+
     And,
     Or,
     Eq,
@@ -77,7 +69,7 @@ pub enum Operator {
     Gt,
     Le,
     Ge,
-    
+
     Lsh,
     Rsh,
     Xor,
@@ -173,9 +165,18 @@ peg::parser! {
             { v.into() }
 
         rule scoped() -> Scoped
-            = ds:decls() _ s:scoped() { let mut s = s; s.decls.insert(0, ds); s }
+            // a relatively compact representation, outer layer list for list of `with`, and inner 
+            // layer list for "concurrent" declarations from each `with`. so
+            //     with a = ...
+            //     with b = ..., c = ... (expr)
+            // will be [[(a, ...)], [(b, ...), (c, ...)]]
+            // there was a time where `with` is prepended to decalarations whenever possible, and 
+            // this compacted representation can avoid terribly deep nested AST
+            // this does not cause problem after i revert the coding style, so just save it in case 
+            // needed
+            = ds:decls() _ s:scoped() { let mut s = s; s.decls.splice(0..0, ds); s }
             / ds:decls() _ es:scoped_exprs()
-            { Scoped { decls: vec![ds], exprs: es.0, value_expr: es.1 } }
+            { Scoped { decls: ds, exprs: es.0, value_expr: es.1 } }
             / es:scoped_exprs()
             { Scoped { decls: Vec::new(), exprs: es.0, value_expr: es.1 } }
 
