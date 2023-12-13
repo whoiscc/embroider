@@ -7,6 +7,8 @@ pub enum Expr {
     Record(Vec<(String, ExprO)>),
     Abstraction(Abstraction),
 
+    Import(String),
+
     Variable(String),
 
     GetField(Box<ExprO>, String),
@@ -88,7 +90,7 @@ peg::parser! {
             --
             e:@ _ "mut." v:variable() _ m:boxed_expr() { Expr::MutField(Box::new(e), v, m) }
             v:variable() _ "mut" _ m:boxed_expr() { Expr::Mut(v, m) }
-            v:variable() _ "capture" _ c:variable() { Expr::Capture(v, c) }
+            // v:variable() _ "capture" _ c:variable() { Expr::Capture(v, c) }
             --
             e:(@) _ "or" _ x:@ { Expr::Operator(Operator::Or, vec![e, x]) }
             --
@@ -136,6 +138,7 @@ peg::parser! {
             "control" { Expr::Control }
             "suspend" _ e:boxed_expr() { Expr::Suspend(e) }
             "resume" _ e:boxed_expr() { Expr::Resume(e) }
+            "import" _ s:string() { Expr::Import(s) }
             e:variable() { Expr::Variable(e) }
         }
 
@@ -165,14 +168,14 @@ peg::parser! {
             { v.into() }
 
         rule scoped() -> Scoped
-            // a relatively compact representation, outer layer list for list of `with`, and inner 
+            // a relatively compact representation, outer layer list for list of `with`, and inner
             // layer list for "concurrent" declarations from each `with`. so
             //     with a = ...
             //     with b = ..., c = ... (expr)
             // will be [[(a, ...)], [(b, ...), (c, ...)]]
-            // there was a time where `with` is prepended to decalarations whenever possible, and 
+            // there was a time where `with` is prepended to decalarations whenever possible, and
             // this compacted representation can avoid terribly deep nested AST
-            // this does not cause problem after i revert the coding style, so just save it in case 
+            // this does not cause problem after i revert the coding style, so just save it in case
             // needed
             = ds:decls() _ s:scoped() { let mut s = s; s.decls.splice(0..0, ds); s }
             / ds:decls() _ es:scoped_exprs()

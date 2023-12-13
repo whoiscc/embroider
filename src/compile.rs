@@ -42,7 +42,7 @@ pub enum Const {
     String(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Chunk {
     pub description: String,
     pub arity: usize,
@@ -56,6 +56,8 @@ pub struct Compiler {
     pub lang_indexes: HashMap<String, ChunkIndex>,
     pub symbols: Vec<String>,
     symbol_indexes: HashMap<String, Symbol>,
+    modules: HashMap<String, ChunkIndex>,
+    module_placeholders: HashMap<String, ChunkIndex>,
 
     instrs: Vec<Instr>,
     consts: Vec<Const>,
@@ -101,19 +103,33 @@ impl Compiler {
             })
     }
 
-    pub fn compile_chunk(&mut self, expr: ExprO) -> anyhow::Result<ChunkIndex> {
+    pub fn compile_module(&mut self, name: String, expr: ExprO) -> anyhow::Result<ChunkIndex> {
         let saved_instrs = take(&mut self.instrs);
         let saved_consts = take(&mut self.consts);
         self.compile_expr(expr)?;
-        let chunk_index = self.chunks.len();
         let chunk = Chunk {
-            description: "<main>".into(),
+            description: name.clone(),
             arity: 0,
             instrs: replace(&mut self.instrs, saved_instrs),
             consts: replace(&mut self.consts, saved_consts),
         };
-        self.chunks.push(chunk);
+        let chunk_index = if let Some(chunk_index) = self.module_placeholders.remove(&name) {
+            self.chunks[chunk_index] = chunk;
+            chunk_index
+        } else {
+            let chunk_index = self.chunks.len();
+            self.chunks.push(chunk);
+            chunk_index
+        };
+        self.modules.insert(name, chunk_index);
         Ok(chunk_index)
+    }
+
+    pub fn next_imported(&self) -> Option<&str> {
+        self.module_placeholders
+            .keys()
+            .map(std::ops::Deref::deref)
+            .next()
     }
 
     pub fn resolve(&mut self, name: String, capturing: bool) -> Result<RegIndex, CompileErrorKind> {
@@ -417,6 +433,17 @@ impl Compiler {
                 self.compile_expr(*expr)?;
                 self.instrs.push(Instr::Resume(reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
+            }
+            Expr::Import(name) => {
+                let chunk_index = if let Some(chunk_index) = self.modules.get(&name) {
+                    *chunk_index
+                } else {
+                    let chunk_index = self.chunks.len();
+                    self.module_placeholders.insert(name, chunk_index);
+                    self.chunks.push(Chunk::default());
+                    chunk_index
+                };
+                self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
             }
         }
         self.reg_index = reg_index;

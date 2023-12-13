@@ -86,6 +86,11 @@ impl Evaluator {
 
 impl EvaluatorConsts {
     pub fn new(mut compiler: Compiler) -> Self {
+        assert!(
+            compiler.next_imported().is_none(),
+            "imported module not compiled: {:?}",
+            compiler.next_imported()
+        );
         let mut this = Self {
             symbol_chunk: compiler.intern("%chunk".into()),
             symbol_true: compiler.intern("True".into()),
