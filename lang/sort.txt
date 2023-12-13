@@ -1,17 +1,13 @@
 with
-print = func(a) lang print ()
-repr = func(a) lang repr ()
-U64 = func(a) lang value_u64 ()
-Instant = {
-    now: func() lang instant_now ()
-    elapsed: func(a) lang instant_elapsed ()
-}
-Vec = {
-    new: func() lang vec_new ()
-    push: func(a, b) lang vec_push ()
-    index: func(a, b) lang vec_index ()
-    index_mut: func(a, b, c) lang vec_index_mut ()
-}
+
+builtin = import "builtin"
+std = import "std"
+
+U64 = builtin.U64
+print = builtin.print
+repr = builtin.repr
+Instant = std.Instant
+Vec = std.Vec
 
 start = Instant.now() 
 
@@ -27,7 +23,8 @@ loop match i < U64(1000000) | {False} break | {True} (
 )
 print("check: " + repr(x))
 
-with sort = func(xs, l, h, lt) capture { sort }
+with sort = func(xs, l, h, lt) 
+    capture sort
     match h - l > U64(1) | {True} with
 #        debug = with
 #            i = l (
@@ -61,7 +58,6 @@ with sort = func(xs, l, h, lt) capture { sort }
         sort(xs, h + U64(1), saved_h, lt)
     )
 (
-sort capture { sort: sort }
 sort(xs, U64(0), U64(i), func(a, b) a < b)
 
 with

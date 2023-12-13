@@ -443,7 +443,8 @@ impl Compiler {
                     self.chunks.push(Chunk::default());
                     chunk_index
                 };
-                self.instrs.push(Instr::LoadChunk(reg_index, chunk_index))
+                self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
+                self.instrs.push(Instr::Apply(reg_index, 0))
             }
         }
         self.reg_index = reg_index;

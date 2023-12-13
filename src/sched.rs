@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, select, unbounded, Receiver, Sender};
 
 use crate::{
     compile::ChunkIndex, eval::EvaluatorConsts, gc::Allocator, value::ValueType, Evaluator, Value,
@@ -128,4 +128,31 @@ pub fn new_system(
         eval_consts,
         suspend_control: None,
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct StopGroup {
+    tx: Sender<()>,
+    rx: Receiver<()>,
+}
+
+impl Default for StopGroup {
+    fn default() -> Self {
+        let (tx, rx) = bounded(0);
+        Self { tx, rx }
+    }
+}
+
+impl StopGroup {
+    pub fn spawn(
+        &self,
+        task: impl FnOnce(Receiver<()>) -> anyhow::Result<()> + Send + 'static,
+    ) -> std::thread::JoinHandle<anyhow::Result<()>> {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            let result = task(this.rx);
+            while this.tx.send(()).is_ok() {}
+            result
+        })
+    }
 }

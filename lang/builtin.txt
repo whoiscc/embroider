@@ -1,0 +1,5 @@
+{
+print: func(a) lang print ()
+repr: func(a) lang repr ()
+U64: func(a) lang value_u64 ()
+}

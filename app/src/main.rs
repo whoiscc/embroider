@@ -1,8 +1,6 @@
-use std::thread::{spawn, JoinHandle};
 use std::{fs::File, io::Write, path::Path};
 
-use crossbeam_channel::{bounded, Receiver, Sender};
-
+use embroider::sched::StopGroup;
 use embroider::{ast, Compiler};
 use embroider::{compile::CompileError, eval::EvaluatorConsts, sched::new_system};
 
@@ -44,7 +42,7 @@ fn main() -> anyhow::Result<()> {
     embroider_std::link(&mut eval_consts);
     let workers = new_system(eval_consts, chunk_index.unwrap());
 
-    let group = StopGroup::new();
+    let group = StopGroup::default();
     let workers = workers
         .map(|mut worker| group.spawn(move |stop_rx| worker.run(stop_rx)))
         .take(std::thread::available_parallelism()?.get())
@@ -54,29 +52,4 @@ fn main() -> anyhow::Result<()> {
         worker.join().unwrap()?
     }
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct StopGroup {
-    tx: Sender<()>,
-    rx: Receiver<()>,
-}
-
-impl StopGroup {
-    fn new() -> Self {
-        let (tx, rx) = bounded(0);
-        Self { tx, rx }
-    }
-
-    fn spawn(
-        &self,
-        task: impl FnOnce(Receiver<()>) -> anyhow::Result<()> + Send + 'static,
-    ) -> JoinHandle<anyhow::Result<()>> {
-        let this = self.clone();
-        spawn(move || {
-            let result = task(this.rx);
-            while this.tx.send(()).is_ok() {}
-            result
-        })
-    }
 }

@@ -1,0 +1,12 @@
+{
+Instant: {
+    now: func() lang instant_now ()
+    elapsed: func(a) lang instant_elapsed ()
+}
+Vec: {
+    new: func() lang vec_new ()
+    push: func(a, b) lang vec_push ()
+    index: func(a, b) lang vec_index ()
+    index_mut: func(a, b, c) lang vec_index_mut ()
+}
+}
