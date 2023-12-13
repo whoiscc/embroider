@@ -85,6 +85,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "embroider-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "embroider",
+ "embroider-std",
+]
+
+[[package]]
+name = "embroider-std"
+version = "0.1.0"
+dependencies = [
+ "embroider",
+]
+
+[[package]]
 name = "gimli"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

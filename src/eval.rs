@@ -68,6 +68,11 @@ impl Error for EvalError {}
 
 impl Evaluator {
     pub fn new(consts: Arc<EvaluatorConsts>, allocator: Allocator) -> Self {
+        assert!(
+            consts.lang_indexes.is_empty(),
+            "language items not linked: {:?}",
+            consts.lang_indexes
+        );
         Self {
             consts,
             allocator,
@@ -93,11 +98,6 @@ impl EvaluatorConsts {
         this.link("repr", Evaluator::intrinsic_repr);
         this.link("panic", Evaluator::intrinsic_panic);
         value::link(&mut this);
-        assert!(
-            this.lang_indexes.is_empty(),
-            "language items not linked: {:?}",
-            this.lang_indexes
-        );
         this
     }
 

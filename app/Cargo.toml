@@ -1,0 +1,14 @@
+[package]
+name = "embroider-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "embroider"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.75"
+crossbeam-channel = "0.5.8"
+embroider = { version = "0.1.0", path = ".." }
+embroider-std = { version = "0.1.0", path = "../bindings/std" }

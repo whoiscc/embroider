@@ -1,22 +1,10 @@
-pub mod ast;
-pub mod compile;
-pub mod eval;
-pub mod gc;
-pub mod sched;
-pub mod value;
-
-use crossbeam_channel::{unbounded, Receiver, Sender};
-
-pub use crate::compile::Compiler;
-pub use crate::eval::Evaluator;
-pub use crate::value::Value;
-
 use std::thread::{spawn, JoinHandle};
 use std::{fs::File, io::Write, path::Path};
 
-use crate::compile::CompileError;
-use crate::eval::EvaluatorConsts;
-use crate::sched::new_system;
+use crossbeam_channel::{unbounded, Receiver, Sender};
+
+use embroider::{ast, Compiler};
+use embroider::{compile::CompileError, eval::EvaluatorConsts, sched::new_system};
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args()
@@ -44,7 +32,9 @@ fn main() -> anyhow::Result<()> {
     for chunk_index in 0..compiler.chunks.len() {
         writeln!(instr_out, "{}", compiler.disassemble(chunk_index))?
     }
-    let workers = new_system(EvaluatorConsts::new(compiler), chunk_index);
+    let mut eval_consts = EvaluatorConsts::new(compiler);
+    embroider_std::link(&mut eval_consts);
+    let workers = new_system(eval_consts, chunk_index);
 
     let n = std::thread::available_parallelism()?.get();
     let group = StopGroup::new(n - 1);
