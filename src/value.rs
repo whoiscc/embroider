@@ -20,32 +20,47 @@ where
     fn type_name(&self) -> &str {
         type_name::<Self>()
     }
+
+    fn downcast_ref(value: &Value) -> Option<&Self>
+    where
+        Self: Sized,
+    {
+        let Value::Dyn(addr) = value else {
+            return None;
+        };
+        addr.access_shared().any_ref().downcast_ref()
+    }
+
+    fn downcast_mut(value: &mut Value) -> Option<&mut Self>
+    where
+        Self: Sized,
+    {
+        if let Value::Dyn(addr) = value {
+            addr.access_exclusive().any_mut().downcast_mut()
+        } else {
+            None
+        }
+    }
 }
 
 pub trait ValueTypeExt {
-    fn trace(&self);
-
     fn type_name(&self) -> &str;
 
-    fn any_ref(&self) -> &(dyn Any + 'static);
+    fn any_ref(&self) -> &dyn Any;
 
-    fn any_mut(&mut self) -> &mut (dyn Any + 'static);
+    fn any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: ValueType> ValueTypeExt for T {
-    fn trace(&self) {
-        ValueType::trace(self)
-    }
-
     fn type_name(&self) -> &str {
         ValueType::type_name(self)
     }
 
-    fn any_ref(&self) -> &(dyn Any + 'static) {
+    fn any_ref(&self) -> &dyn Any {
         self
     }
 
-    fn any_mut(&mut self) -> &mut (dyn Any + 'static) {
+    fn any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -54,6 +69,7 @@ impl<T: ValueType> ValueTypeExt for T {
 pub enum Value {
     Invalid,
     // universal representation
+    // dynamical in both (Rust) type and lifetime
     Dyn(Addr),
     // extension to support representing closures with records
     ChunkIndex(usize),
@@ -63,6 +79,84 @@ pub enum Value {
     I32(i32),
     U64(u64),
     F64(f64),
+}
+
+impl ValueType for bool {
+    fn trace(&self) {}
+
+    fn downcast_ref(value: &Value) -> Option<&Self>
+    where
+        Self: Sized,
+    {
+        if let Value::Bool(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn downcast_mut(value: &mut Value) -> Option<&mut Self>
+    where
+        Self: Sized,
+    {
+        if let Value::Bool(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+impl ValueType for u64 {
+    fn trace(&self) {}
+
+    fn downcast_ref(value: &Value) -> Option<&Self>
+    where
+        Self: Sized,
+    {
+        if let Value::U64(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn downcast_mut(value: &mut Value) -> Option<&mut Self>
+    where
+        Self: Sized,
+    {
+        if let Value::U64(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+impl ValueType for f64 {
+    fn trace(&self) {}
+
+    fn downcast_ref(value: &Value) -> Option<&Self>
+    where
+        Self: Sized,
+    {
+        if let Value::F64(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn downcast_mut(value: &mut Value) -> Option<&mut Self>
+    where
+        Self: Sized,
+    {
+        if let Value::F64(value) = value {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl Value {
@@ -79,41 +173,17 @@ impl Value {
         }
     }
 
-    pub fn downcast_ref<T: 'static>(&self) -> Result<&T, EvalErrorKind> {
-        match self {
-            Self::I32(value) => (value as &dyn Any).downcast_ref(),
-            Self::U64(value) => (value as &dyn Any).downcast_ref(),
-            Self::F64(value) => (value as &dyn Any).downcast_ref(),
-            Self::Dyn(addr) => addr.access_shared().any_ref().downcast_ref(),
-            _ => None,
-        }
-        .ok_or(EvalErrorKind::TypeError(
+    pub fn downcast_ref<T: ValueType>(&self) -> Result<&T, EvalErrorKind> {
+        T::downcast_ref(self).ok_or(EvalErrorKind::TypeError(
             self.type_name().into(),
             type_name::<T>().into(),
         ))
     }
 
-    pub fn downcast_mut<T: 'static>(&mut self) -> Result<&mut T, EvalErrorKind> {
+    pub fn downcast_mut<T: ValueType>(&mut self) -> Result<&mut T, EvalErrorKind> {
         // workaround for lifetime error, not sure why it happens
         let name = self.type_name().into();
-        match self {
-            Self::I32(value) => (value as &mut dyn Any).downcast_mut(),
-            Self::U64(value) => (value as &mut dyn Any).downcast_mut(),
-            Self::F64(value) => (value as &mut dyn Any).downcast_mut(),
-            Self::Dyn(addr) => addr.access_exclusive().any_mut().downcast_mut(),
-            _ => None,
-        }
-        .ok_or(EvalErrorKind::TypeError(name, type_name::<T>().into()))
-    }
-
-    pub fn is<T: 'static>(&self) -> bool {
-        match self {
-            Self::I32(value) => (value as &dyn Any).is::<T>(),
-            Self::U64(value) => (value as &dyn Any).is::<T>(),
-            Self::F64(value) => (value as &dyn Any).is::<T>(),
-            Self::Dyn(addr) => addr.access_shared().any_ref().is::<T>(),
-            _ => false,
-        }
+        T::downcast_mut(self).ok_or(EvalErrorKind::TypeError(name, type_name::<T>().into()))
     }
 
     fn intrinsic_u64(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {

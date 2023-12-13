@@ -163,6 +163,7 @@ impl Evaluator {
             let chunk = &self.consts.chunks[frame.chunk_index];
             let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {
                 assert_eq!(frame.instr_pointer, chunk.instrs.len());
+                self.registers.truncate(frame.base_pointer + 1); // for returned value
                 self.frames.pop().unwrap();
                 continue;
             };

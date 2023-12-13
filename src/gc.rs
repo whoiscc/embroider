@@ -8,11 +8,8 @@ pub struct Addr(*mut Object);
 unsafe impl Send for Addr {}
 unsafe impl Sync for Addr {}
 
-// both underlying (Rust) type and lifetime are dynamical
-type Dyn = Box<dyn ValueTypeExt>;
-
 struct Object {
-    content: Dyn,
+    content: Box<dyn ValueTypeExt>,
     #[allow(unused)]
     link: *mut Object,
 }
