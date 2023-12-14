@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     error::Error,
     fmt::Display,
     mem::{replace, take},
@@ -48,8 +48,6 @@ pub struct Chunk {
     pub arity: usize,
     pub instrs: Vec<Instr>,
     pub consts: Vec<Const>,
-
-    pub blocks: BTreeMap<InstrIndex, Vec<InstrIndex>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -71,10 +69,6 @@ pub struct Compiler {
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
-    blocks: BTreeMap<InstrIndex, Vec<InstrIndex>>,
-    block_index: InstrIndex,
-    break_block_indexes: Vec<InstrIndex>,
-    continue_block_index: Option<InstrIndex>,
     description_hint: String,
 }
 
@@ -110,19 +104,14 @@ impl Compiler {
     }
 
     pub fn compile_module(&mut self, name: String, expr: ExprO) -> anyhow::Result<ChunkIndex> {
-        assert!(self.instrs.is_empty());
-        assert!(self.consts.is_empty());
-        assert!(self.blocks.is_empty());
-        assert_eq!(self.reg_index, 0);
-        assert_eq!(self.block_index, 0);
-        self.blocks.insert(0, Default::default());
+        let saved_instrs = take(&mut self.instrs);
+        let saved_consts = take(&mut self.consts);
         self.compile_expr(expr)?;
         let chunk = Chunk {
             description: name.clone(),
             arity: 0,
-            instrs: take(&mut self.instrs),
-            consts: take(&mut self.consts),
-            blocks: take(&mut self.blocks),
+            instrs: replace(&mut self.instrs, saved_instrs),
+            consts: replace(&mut self.consts, saved_consts),
         };
         let chunk_index = if let Some(chunk_index) = self.module_placeholders.remove(&name) {
             self.chunks[chunk_index] = chunk;
@@ -133,8 +122,6 @@ impl Compiler {
             chunk_index
         };
         self.modules.insert(name, chunk_index);
-        self.reg_index = 0;
-        self.block_index = 0;
         Ok(chunk_index)
     }
 
@@ -165,16 +152,6 @@ impl Compiler {
             }
         }
         Err(CompileErrorKind::ResolveFail(name))
-    }
-
-    fn take_block(&mut self) -> InstrIndex {
-        let index = replace(&mut self.block_index, self.instrs.len());
-        self.blocks.insert(index, Default::default());
-        // should i just push the instr all together in this method?
-        if !matches!(self.instrs.last().unwrap(), Instr::Jump(_)) {
-            self.blocks.get_mut(&index).unwrap().push(self.block_index)
-        }
-        index
     }
 
     // convention: anything below `self.reg_index` is unchanged
@@ -238,11 +215,6 @@ impl Compiler {
                 let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
-                let saved_blocks = replace(
-                    &mut self.blocks,
-                    [(0, Default::default())].into_iter().collect(),
-                );
-                let saved_block_index = take(&mut self.block_index);
                 self.reg_index = i;
                 // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
@@ -256,14 +228,12 @@ impl Compiler {
                 }
                 self.continue_jump_index = saved_continue_jump_index;
                 self.break_indexes = saved_break_indexes;
-                self.block_index = saved_block_index;
                 let chunk_index = self.chunks.len();
                 let chunk = Chunk {
                     description: self.description_hint.clone(),
                     arity,
                     instrs: replace(&mut self.instrs, saved_instrs),
                     consts: replace(&mut self.consts, saved_consts),
-                    blocks: replace(&mut self.blocks, saved_blocks),
                 };
                 self.chunks.push(chunk);
                 if let Some(lang) = abstraction.lang {
@@ -272,7 +242,7 @@ impl Compiler {
                 self.instrs.push(Instr::LoadChunk(reg_index, chunk_index));
                 self.scopes = saved_scopes;
                 self.capture_scopes = saved_capture_scopes;
-                // `resolve` may use `self.reg_index`, so adjust it to a safe position
+                // `resolve` which may use `self.reg_index`, so adjust it to a safe position
                 self.reg_index = reg_index + 1;
                 // println!("{} {:?}", chunk_index, self.quasi_scope);
                 // println!("{:?}", self.captures);
@@ -382,18 +352,13 @@ impl Compiler {
             }
             Expr::Match(matching) => {
                 self.compile_expr(*matching.variant)?;
-                let mut merge_indexes = Vec::new();
-                // preset for compiling cases expr
-                // reg_index used by matching condition, reg_index + 1 by optional variant binding
-                // TODO support varible-length binding
+                let mut converge_indexes = Vec::new();
                 self.reg_index = reg_index + 2;
-                let mut case_block_indexes = Vec::new();
                 for (tag, name, expr) in matching.cases {
                     let symbol = self.intern(tag);
                     let match_index = self.instrs.len();
                     self.instrs
                         .push(Instr::MatchField(reg_index, symbol, InstrIndex::MAX));
-                    let match_block_index = self.take_block();
                     let mut scope = HashMap::new();
                     if let Some(name) = name {
                         self.instrs
@@ -402,14 +367,9 @@ impl Compiler {
                     }
                     self.scopes.push(scope);
                     self.compile_expr(expr)?;
-                    merge_indexes.push(self.instrs.len());
+                    converge_indexes.push(self.instrs.len());
                     self.instrs.push(Instr::Jump(InstrIndex::MAX));
                     self.scopes.pop().unwrap();
-                    case_block_indexes.push(self.take_block());
-                    self.blocks
-                        .get_mut(&match_block_index)
-                        .unwrap()
-                        .push(self.block_index);
                     let match_jump_index = self.instrs.len();
                     let Instr::MatchField(_, _, index) = &mut self.instrs[match_index] else {
                         unreachable!()
@@ -418,19 +378,12 @@ impl Compiler {
                 }
                 // all matching failed: evaluate to unit
                 self.instrs.push(Instr::LoadUnit(self.reg_index));
-                self.take_block();
-                for block_index in case_block_indexes {
-                    self.blocks
-                        .get_mut(&block_index)
-                        .unwrap()
-                        .push(self.block_index)
-                }
-                let merge_jump_index = self.instrs.len();
-                for index in merge_indexes {
+                let converge_jump_index = self.instrs.len();
+                for index in converge_indexes {
                     let Instr::Jump(index) = &mut self.instrs[index] else {
                         unreachable!()
                     };
-                    *index = merge_jump_index
+                    *index = converge_jump_index
                 }
                 self.instrs.push(Instr::Move(reg_index, self.reg_index))
             }
@@ -438,22 +391,9 @@ impl Compiler {
                 let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_continue_jump_index =
                     replace(&mut self.continue_jump_index, Some(self.instrs.len()));
-                self.take_block();
-                let saved_break_block_indexes = take(&mut self.break_block_indexes);
-                let saved_continue_block_index =
-                    replace(&mut self.continue_block_index, Some(self.block_index));
                 self.compile_expr(*expr)?;
                 self.instrs
                     .push(Instr::Jump(self.continue_jump_index.unwrap()));
-                self.take_block();
-                for block_index in replace(&mut self.break_block_indexes, saved_break_block_indexes)
-                {
-                    self.blocks
-                        .get_mut(&block_index)
-                        .unwrap()
-                        .push(self.block_index)
-                }
-                self.continue_block_index = saved_continue_block_index;
                 let break_jump_index = self.instrs.len();
                 for break_index in replace(&mut self.break_indexes, saved_break_indexes) {
                     let Instr::Jump(index) = &mut self.instrs[break_index] else {
@@ -467,28 +407,17 @@ impl Compiler {
                 self.compile_expr(*expr)?;
                 self.instrs.push(Instr::Move(0, reg_index));
                 self.return_indexes.push(self.instrs.len());
-                self.instrs.push(Instr::Jump(InstrIndex::MAX));
-                // it is ok to always take current block out, because abstraction always appends
-                // something after compiling the body expr
-                self.take_block();
+                self.instrs.push(Instr::Jump(InstrIndex::MAX))
             }
             Expr::Break => {
                 self.break_indexes.push(self.instrs.len());
-                self.instrs.push(Instr::Jump(InstrIndex::MAX));
-                let block_index = self.take_block();
-                self.break_block_indexes.push(block_index)
+                self.instrs.push(Instr::Jump(InstrIndex::MAX))
             }
-            Expr::Continue => {
-                self.instrs
-                    .push(Instr::Jump(self.continue_jump_index.ok_or(
-                        CompileError(CompileErrorKind::ContinueOutsideLoop, offset),
-                    )?));
-                let block_index = self.take_block();
-                self.blocks
-                    .get_mut(&block_index)
-                    .unwrap()
-                    .push(self.continue_block_index.unwrap())
-            }
+            Expr::Continue => self
+                .instrs
+                .push(Instr::Jump(self.continue_jump_index.ok_or(
+                    CompileError(CompileErrorKind::ContinueOutsideLoop, offset),
+                )?)),
             Expr::Spawn(expr) => {
                 self.compile_expr(*expr)?;
                 self.instrs.push(Instr::Spawn(reg_index));
@@ -541,9 +470,6 @@ impl Display for DisassembleChunk<'_> {
         let chunk = &self.compiler.chunks[self.chunk_index];
         writeln!(f, "chunk {} {}", self.chunk_index, chunk.description)?;
         for (index, instr) in chunk.instrs.iter().enumerate() {
-            if let Some(block_indexes) = chunk.blocks.get(&index) {
-                writeln!(f, "  block -> {block_indexes:?}")?
-            }
             write!(f, "  {index:>4} {instr:?}")?;
             match instr {
                 Instr::LoadConst(_, index) => write!(f, " {:?}", chunk.consts[*index])?,
