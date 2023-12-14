@@ -1,8 +1,8 @@
-with 
+with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 
-make_class = func(class, make_new) 
+make_class = func(class, make_new)
     with m = {self: ()}
     with m_class = class(m) (
     m mut.self m_class
@@ -16,7 +16,7 @@ set_counter_class = func(self) func(rep) {
 }
 set_counter = make_class(set_counter_class, func(self) func() self({x: 1}))
 
-instr_counter_class = func(self) func(rep) 
+instr_counter_class = func(self) func(rep)
     with super = set_counter_class(self) ({
         get: super(rep).get
         set: func(i) (

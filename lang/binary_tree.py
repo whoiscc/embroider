@@ -11,7 +11,7 @@ class Tree:
         else:
             self.left = None
             self.right = None
-    
+
     def check(self):
         if self.left:
             return self.item + self.left.check() - self.right.check()
@@ -35,7 +35,7 @@ while depth < stretch_depth:
     check = 0
     for i in range(1, iterations + 1):
         check += Tree(i, depth).check() + Tree(-i, depth).check()
-    
+
     print("num tree: " + repr(iterations * 2))
     print("depth: " + repr(depth))
     print("check: " + repr(check))

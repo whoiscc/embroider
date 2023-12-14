@@ -9,7 +9,7 @@ repr = builtin.repr
 Instant = std.Instant
 Vec = std.Vec
 
-start = Instant.now() 
+start = Instant.now()
 
 xs = Vec.new()
 x = U64(117418)
@@ -23,7 +23,7 @@ loop match i < U64(1000000) | {False} break | {True} (
 )
 print("check: " + repr(x))
 
-with sort = func(xs, l, h, lt) 
+with sort = func(xs, l, h, lt)
     capture sort
     match h - l > U64(1) | {True} with
 #        debug = with
@@ -37,7 +37,7 @@ with sort = func(xs, l, h, lt)
 #            )
         saved_l = l
         saved_h = h
-        pivot = Vec.index(xs, l) 
+        pivot = Vec.index(xs, l)
         h = h - U64(1) (
         loop match l < h | {False} break | {True}
             with x = Vec.index(xs, l) (
@@ -62,7 +62,7 @@ sort(xs, U64(0), U64(i), func(a, b) a < b)
 
 with
 sum1 = U64(0)
-sum2 = U64(0) 
+sum2 = U64(0)
 j = U64(0) (
 loop match j < i | {False} break | {True} (
     sum1 mut (sum1 + Vec.index(xs, j)) % (U64(1) << U64(32))

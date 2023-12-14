@@ -1,4 +1,4 @@
-with 
+with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 Instant = {
@@ -13,12 +13,12 @@ tree_class = func(self) func(rep) {
         | {None} rep.item
         | {Some} rep.item + rep.left.Some.check() - rep.right.Some.check()
 }
-tree = with 
+tree = with
     m = {class: func(rep) {}}
     m_class = tree_class(m) (
     m mut.class m_class
 
-    with tree = func(item, depth) 
+    with tree = func(item, depth)
         capture tree
         with rep = match depth > 0
             | {True} with
@@ -30,7 +30,7 @@ tree = with
             | {False}
                 { item: item, depth: depth, left: none, right: none } (
         m_class(rep)
-    ) 
+    )
     (tree)
 )
 
@@ -42,7 +42,7 @@ start = Instant.now() (
 print("stretch tree of depth " + repr(stretch_depth))
 print("check: " + repr(tree(0, stretch_depth).check()))
 
-with 
+with
 long_lived_tree = tree(0, max_depth)
 iterations = 1
 d = 0 (
@@ -52,7 +52,7 @@ loop match d < max_depth | {False} break | {True} (
 )
 
 with depth = min_depth (
-loop match depth < stretch_depth | {False} break | {True} with 
+loop match depth < stretch_depth | {False} break | {True} with
     check = 0
     i = 1 (
     loop match i <= iterations | {False} break | {True} (

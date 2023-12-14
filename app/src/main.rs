@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
                 )
             }
         }
-        chunk_index = chunk_index.or(Some(result?));
+        chunk_index.get_or_insert(result?);
         let mut instr_out = File::create(auxiliary_dir.join(&module).with_extension("instr.txt"))?;
         for chunk_index in 0..compiler.chunks.len() {
             writeln!(instr_out, "{}", compiler.disassemble(chunk_index))?

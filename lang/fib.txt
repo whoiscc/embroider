@@ -7,7 +7,7 @@ Instant = {
 }
 
 fib = func(n)
-    capture fib 
+    capture fib
     match n < 2
     | {True} n
     | {False} fib(n - 1) + fib(n - 2) (

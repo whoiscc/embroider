@@ -1,19 +1,15 @@
 with
-print = func(a) lang print ()
-repr = func(a) lang repr ()
-U64 = func(a) lang value_u64 ()
-Instant = {
-    now: func() lang instant_now ()
-    elapsed: func(a) lang instant_elapsed ()
-}
-Vec = {
-    new: func() lang vec_new ()
-    push: func(a, b) lang vec_push ()
-    index: func(a, b) lang vec_index ()
-    index_mut: func(a, b, c) lang vec_index_mut ()
-}
 
-start = Instant.now() 
+builtin = import "builtin"
+std = import "std"
+
+U64 = builtin.U64
+print = builtin.print
+repr = builtin.repr
+Instant = std.Instant
+Vec = std.Vec
+
+start = Instant.now()
 
 xs = Vec.new()
 x = U64(117418)
@@ -27,8 +23,9 @@ loop match i < U64(1000000) | {False} break | {True} (
 )
 print("check: " + repr(x))
 
-with sort = func(xs, l, h, lt, k) capture { sort }
-    match h - l > U64(1) 
+with sort = func(xs, l, h, lt, k)
+    capture sort
+    match h - l > U64(1)
     | {False} resume k
     | {True} with
 #        debug = with
@@ -42,7 +39,7 @@ with sort = func(xs, l, h, lt, k) capture { sort }
 #            )
         saved_l = l
         saved_h = h
-        pivot = Vec.index(xs, l) 
+        pivot = Vec.index(xs, l)
         h = h - U64(1) (
         loop match l < h | {False} break | {True}
             with x = Vec.index(xs, l) (
@@ -59,9 +56,9 @@ with sort = func(xs, l, h, lt, k) capture { sort }
                 Vec.index_mut(xs, l, y)
                 Vec.index_mut(xs, h, x)
             )))
-        
+
         with
-        k2 = control 
+        k2 = control
         k3 = control (
         spawn func() sort(xs, saved_l, h, lt, k2)
         spawn func() sort(xs, h + U64(1), saved_h, lt, k3)
@@ -70,14 +67,13 @@ with sort = func(xs, l, h, lt, k) capture { sort }
         resume k
     ))
 (
-sort capture { sort: sort }
 with k = control (
 sort(xs, U64(0), U64(i), func(a, b) a < b, k)
 suspend k
 
 with
 sum1 = U64(0)
-sum2 = U64(0) 
+sum2 = U64(0)
 j = U64(0) (
 loop match j < i | {False} break | {True} (
     sum1 mut (sum1 + Vec.index(xs, j)) % (U64(1) << U64(32))

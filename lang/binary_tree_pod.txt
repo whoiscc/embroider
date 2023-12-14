@@ -1,4 +1,4 @@
-with 
+with
 print = func(a) lang print ()
 repr = func(a) lang repr ()
 Instant = {
@@ -8,20 +8,20 @@ Instant = {
 some = func(value) { Some: value }
 none = {None: ()}
 
-tree = func(item, depth) 
+tree = func(item, depth)
     capture tree
     match depth > 0
         | {True} with
             item2 = item + item
             left = tree(item2 - 1, depth - 1)
-            right = tree(item2, depth - 1) 
+            right = tree(item2, depth - 1)
             ({ item: item, depth: depth, left: some(left), right: some(right) })
         | {False}
             {item: item, depth: depth, left: none, right: none} (
 
-with 
-check = func(node) 
-    capture check 
+with
+check = func(node)
+    capture check
     match node.left
     | {None} node.item
     | {Some} node.item + check(node.left.Some) - check(node.right.Some) (
@@ -35,7 +35,7 @@ start = Instant.now() (
 print("stretch tree of depth " + repr(stretch_depth))
 print("check: " + repr(check(tree(0, stretch_depth))))
 
-with 
+with
 long_lived_tree = tree(0, max_depth)
 iterations = 1
 d = 0 (
@@ -45,7 +45,7 @@ loop match d < max_depth | {False} break | {True} (
 )
 
 with depth = min_depth (
-loop match depth < stretch_depth | {False} break | {True} with 
+loop match depth < stretch_depth | {False} break | {True} with
     check_sum = 0
     i = 1 (
     loop match i <= iterations | {False} break | {True} (
