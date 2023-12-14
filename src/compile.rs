@@ -21,7 +21,7 @@ pub enum Instr {
     LoadRecord(RegIndex, Vec<(Symbol, RegIndex)>),
     LoadChunk(RegIndex, ChunkIndex),
 
-    Move(RegIndex, RegIndex),
+    Copy(RegIndex, RegIndex),
     Operator(RegIndex, Operator, Vec<RegIndex>),
     Apply(RegIndex, usize),
 
@@ -166,14 +166,28 @@ impl Compiler {
         let offset = expr.1;
         match expr.0 {
             Expr::Integer(integer) => {
-                self.instrs
-                    .push(Instr::LoadConst(reg_index, self.consts.len()));
-                self.consts.push(Const::I32(integer))
+                let const_index = self
+                    .consts
+                    .iter()
+                    .position(|c| *c == Const::I32(integer))
+                    .unwrap_or_else(|| {
+                        let index = self.consts.len();
+                        self.consts.push(Const::I32(integer));
+                        index
+                    });
+                self.instrs.push(Instr::LoadConst(reg_index, const_index))
             }
             Expr::String(string) => {
-                self.instrs
-                    .push(Instr::LoadConst(reg_index, self.consts.len()));
-                self.consts.push(Const::String(string))
+                let const_index = self
+                    .consts
+                    .iter()
+                    .position(|c| *c == Const::String(string.clone()))
+                    .unwrap_or_else(|| {
+                        let index = self.consts.len();
+                        self.consts.push(Const::String(string));
+                        index
+                    });
+                self.instrs.push(Instr::LoadConst(reg_index, const_index))
             }
             Expr::Record(rows) => {
                 let mut operands = Vec::new();
@@ -218,7 +232,7 @@ impl Compiler {
                 self.reg_index = i;
                 // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
-                self.instrs.push(Instr::Move(0, i));
+                self.instrs.push(Instr::Copy(0, i));
                 let return_jump_index = self.instrs.len();
                 for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
                     let Instr::Jump(index) = &mut self.instrs[return_index] else {
@@ -262,7 +276,7 @@ impl Compiler {
                 let resolved = self
                     .resolve(name.clone(), true)
                     .map_err(|kind| CompileError(kind, offset))?;
-                self.instrs.push(Instr::Move(self.reg_index, resolved))
+                self.instrs.push(Instr::Copy(self.reg_index, resolved))
             }
             Expr::GetField(expr, name) => {
                 self.reg_index += 1;
@@ -299,7 +313,7 @@ impl Compiler {
                 }
                 self.scopes = saved_scopes;
                 self.forward_captures = saved_forward_captures;
-                self.instrs.push(Instr::Move(reg_index, self.reg_index))
+                self.instrs.push(Instr::Copy(reg_index, self.reg_index))
             }
             Expr::Operator(op, exprs) => {
                 // TODO and or
@@ -327,7 +341,7 @@ impl Compiler {
                 let resolved = self
                     .resolve(name, false)
                     .map_err(|kind| CompileError(kind, offset))?;
-                self.instrs.push(Instr::Move(resolved, reg_index));
+                self.instrs.push(Instr::Copy(resolved, reg_index));
                 self.instrs.push(Instr::LoadUnit(reg_index))
             }
             Expr::MutField(record, name, expr) => {
@@ -385,7 +399,7 @@ impl Compiler {
                     };
                     *index = converge_jump_index
                 }
-                self.instrs.push(Instr::Move(reg_index, self.reg_index))
+                self.instrs.push(Instr::Copy(reg_index, self.reg_index))
             }
             Expr::Loop(expr) => {
                 let saved_break_indexes = take(&mut self.break_indexes);
@@ -405,7 +419,7 @@ impl Compiler {
             }
             Expr::Return(expr) => {
                 self.compile_expr(*expr)?;
-                self.instrs.push(Instr::Move(0, reg_index));
+                self.instrs.push(Instr::Copy(0, reg_index));
                 self.return_indexes.push(self.instrs.len());
                 self.instrs.push(Instr::Jump(InstrIndex::MAX))
             }

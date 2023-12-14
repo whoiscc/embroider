@@ -230,7 +230,7 @@ impl Evaluator {
                         )))?
                     }
                 }
-                Instr::Move(i, j) => r[i] = r[j].clone(),
+                Instr::Copy(i, j) => r[i] = r[j].clone(),
                 Instr::Operator(i, op, xs) => {
                     r[i] = if xs.len() == 2 {
                         match (op, &r[&xs[0]], &r[&xs[1]]) {

@@ -2,6 +2,7 @@ pub mod ast;
 pub mod compile;
 pub mod eval;
 pub mod gc;
+pub mod optimize;
 pub mod sched;
 pub mod value;
 
