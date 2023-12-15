@@ -39,7 +39,7 @@ type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
 
 #[derive(Debug)]
 struct Frame {
-    chunk_index: usize,
+    chunk_value: Value,
     base_pointer: usize,
     instr_pointer: usize,
 }
@@ -150,32 +150,44 @@ impl IndexMut<&RegIndex> for I<'_> {
 }
 
 impl Evaluator {
-    pub fn push_entry_frame(&mut self, chunk_index: usize) {
+    pub fn push_entry_frame(&mut self, chunk_value: Value) {
         assert!(self.frames.is_empty());
         self.frames.push(Frame {
-            chunk_index,
+            chunk_value,
             base_pointer: 0,
             instr_pointer: 0,
         })
     }
 
-    pub fn push_entry_value(&mut self, value: Value) {
-        assert!(self.registers.is_empty());
-        self.registers.push(value)
-    }
-
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
+        let mut chunk_index = ChunkIndex::MAX;
+        let mut update_chunk_index = true;
         while let Some(frame) = self.frames.last_mut() {
-            let chunk = &self.consts.chunks[frame.chunk_index];
+            if update_chunk_index {
+                chunk_index = if let Value::ChunkIndex(index) = frame.chunk_value {
+                    index
+                } else if let Ok(closure) = frame.chunk_value.downcast_ref::<Closure>() {
+                    closure.chunk_index
+                } else {
+                    unreachable!()
+                };
+                update_chunk_index = false
+            }
+            let chunk = &self.consts.chunks[chunk_index];
             let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {
                 assert_eq!(frame.instr_pointer, chunk.instrs.len());
-                self.registers.truncate(frame.base_pointer + 1); // for returned value
-                self.frames.pop().unwrap();
+                let frame = self.frames.pop().unwrap();
+                // workaround before updating `Apply`
+                if !self.frames.is_empty() {
+                    self.registers[frame.base_pointer - 1] =
+                        self.registers[frame.base_pointer].clone();
+                    self.registers.truncate(frame.base_pointer)
+                }
+                update_chunk_index = true;
                 continue;
             };
 
             let err = {
-                let chunk_index = frame.chunk_index;
                 let instr_pointer = frame.instr_pointer;
                 move |kind| EvalError(kind, chunk_index, instr_pointer)
             };
@@ -227,7 +239,8 @@ impl Evaluator {
                     }
                 }
                 Instr::LoadCapture(i, index) => {
-                    let rj = r[0].downcast_ref::<Closure>().map_err(err)?;
+                    // should always success actually
+                    let rj = frame.chunk_value.downcast_ref::<Closure>().map_err(err)?;
                     let value = rj.captures[*index].clone();
                     if matches!(value, Value::Invalid) {
                         Err(err(EvalErrorKind::CaptureError))?
@@ -337,17 +350,24 @@ impl Evaluator {
                         )))?
                     }
                     if let Some(intrinsic) = self.consts.intrinsics.get(&chunk_index) {
-                        self.intrinsic_base_pointer = frame.base_pointer + *i as usize;
-                        intrinsic(self).map_err(err)?
+                        self.intrinsic_base_pointer = frame.base_pointer + *i as usize + 1;
+                        let i = *i;
+                        intrinsic(self).map_err(err)?;
+                        let mut r = I(
+                            &mut self.registers,
+                            self.frames.last().unwrap().base_pointer,
+                        );
+                        r[i] = r[i + 1].clone()
                     } else {
                         let frame = Frame {
-                            chunk_index,
-                            base_pointer: frame.base_pointer + *i as usize,
+                            chunk_value: r[i].clone(),
+                            base_pointer: frame.base_pointer + *i as usize + 1,
                             instr_pointer: 0,
                         };
                         // println!("{frame:?}");
                         self.frames.push(frame)
                     }
+                    update_chunk_index = true
                 }
                 Instr::MatchField(i, symbol, instr) => {
                     let matched = if let Value::Bool(b) = r[i] {
@@ -388,7 +408,7 @@ impl Evaluator {
                     if self.consts.intrinsics.contains_key(&chunk_index) {
                         Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
                     }
-                    worker.spawn(chunk_index, r[i].clone())?
+                    worker.spawn(r[i].clone())?
                 }
                 Instr::LoadControl(i) => {
                     r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
@@ -410,15 +430,15 @@ impl Evaluator {
 
     fn intrinsic_print(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let r1 = r[1].downcast_ref::<value::String>()?;
-        println!("{}", &**r1);
+        let r0 = r[0].downcast_ref::<value::String>()?;
+        println!("{}", &**r0);
         r[0] = Value::Unit;
         Ok(())
     }
 
     fn intrinsic_repr(&mut self) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let repr = format!("{:?}", r[1]);
+        let repr = format!("{:?}", r[0]);
         r[0] = Value::Dyn(self.allocator.alloc(value::String(repr)));
         // println!("{:?}", r[0]);
         // println!("{}", r[0].type_name());
@@ -427,7 +447,7 @@ impl Evaluator {
 
     fn intrinsic_panic(&mut self) -> Result<(), EvalErrorKind> {
         let r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let r1 = r[1].downcast_ref::<value::String>()?;
-        Err(EvalErrorKind::Panic(String::from(r1.clone())))
+        let r0 = r[0].downcast_ref::<value::String>()?;
+        Err(EvalErrorKind::Panic(String::from(r0.clone())))
     }
 }

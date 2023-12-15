@@ -188,7 +188,7 @@ impl Value {
 
     fn intrinsic_u64(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let value = match &r[1] {
+        let value = match &r[0] {
             Value::U64(value) => *value,
             Value::I32(value) => *value as _,
             Value::F64(value) => *value as _,

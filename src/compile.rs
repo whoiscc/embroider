@@ -227,10 +227,8 @@ impl Compiler {
                 }
                 self.capture_scopes.push(forward_scope.clone());
                 let mut scope = HashMap::new();
-                let mut i = 1; // reserve register 0 for the "closure object"
-                for name in abstraction.variables {
-                    scope.insert(name, i);
-                    i += 1
+                for (i, name) in abstraction.variables.into_iter().enumerate() {
+                    scope.insert(name, i as _);
                 }
                 self.scopes.push(scope);
                 let saved_return_indexes = take(&mut self.return_indexes);
@@ -238,10 +236,10 @@ impl Compiler {
                 let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
-                self.reg_index = i;
+                self.reg_index = arity as _;
                 // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
-                self.instrs.push(Instr::Copy(0, i));
+                self.instrs.push(Instr::Copy(0, arity as _));
                 let return_jump_index = self.instrs.len();
                 for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
                     let Instr::Jump(index) = &mut self.instrs[return_index] else {

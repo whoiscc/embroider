@@ -20,40 +20,40 @@ impl Vec {
 
     fn intrinsic_len(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r1 = r[1].downcast_ref::<Vec>()?;
-        r[0] = Value::U64(r1.0.len() as _);
+        let r0 = r[0].downcast_ref::<Vec>()?;
+        r[0] = Value::U64(r0.0.len() as _);
         Ok(())
     }
 
     fn intrinsic_push(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r2 = r[2].clone();
-        let r1 = r[1].downcast_mut::<Vec>()?;
-        r1.0.push(r2);
+        let r1 = r[1].clone();
+        let r0 = r[0].downcast_mut::<Vec>()?;
+        r0.0.push(r1);
         r[0] = Value::Unit;
         Ok(())
     }
 
     fn intrinsic_insert(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r2 = *r[2].downcast_ref::<u64>()?;
-        let r3 = r[3].clone();
-        let r1 = r[1].downcast_mut::<Vec>()?;
-        r1.0.insert(r2 as _, r3);
+        let r1 = *r[1].downcast_ref::<u64>()?;
+        let r2 = r[2].clone();
+        let r0 = r[0].downcast_mut::<Vec>()?;
+        r0.0.insert(r1 as _, r2);
         r[0] = Value::Unit;
         Ok(())
     }
 
     fn intrinsic_index(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r1 = r[1].downcast_ref::<Vec>()?;
-        let r2 = r[2].downcast_ref::<u64>()?;
+        let r0 = r[0].downcast_ref::<Vec>()?;
+        let r1 = r[1].downcast_ref::<u64>()?;
         r[0] =
-            r1.0.get(*r2 as usize)
+            r0.0.get(*r1 as usize)
                 .ok_or(EvalErrorKind::Panic(format!(
                     "index out of bound: {} >= {}",
-                    r2,
-                    r1.0.len()
+                    r1,
+                    r0.0.len()
                 )))?
                 .clone();
         Ok(())
@@ -61,16 +61,16 @@ impl Vec {
 
     fn intrinsic_index_mut(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r2 = *r[2].downcast_ref::<u64>()?;
-        let r3 = r[3].clone();
-        let r1 = r[1].downcast_mut::<Vec>()?;
-        let r1_len = r1.0.len();
-        *r1.0
-            .get_mut(r2 as usize)
+        let r1 = *r[1].downcast_ref::<u64>()?;
+        let r2 = r[2].clone();
+        let r0 = r[0].downcast_mut::<Vec>()?;
+        let r0_len = r0.0.len();
+        *r0.0
+            .get_mut(r1 as usize)
             .ok_or(EvalErrorKind::Panic(format!(
                 "index out of bound: {} >= {}",
-                r2, r1_len,
-            )))? = r3;
+                r1, r0_len,
+            )))? = r2;
         r[0] = Value::Unit;
         Ok(())
     }
@@ -96,8 +96,8 @@ impl Instant {
 
     fn intrinsic_elapsed(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
         let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
-        let r1 = r[1].downcast_ref::<Instant>()?;
-        r[0] = Value::F64(r1.0.elapsed().as_secs_f64());
+        let r0 = r[0].downcast_ref::<Instant>()?;
+        r[0] = Value::F64(r0.0.elapsed().as_secs_f64());
         Ok(())
     }
 }
