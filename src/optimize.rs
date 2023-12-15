@@ -198,6 +198,7 @@ impl Chunk {
                             uses: vec![*s as _],
                         },
                     ),
+                    Instr::LoadCapture(..) | Instr::StoreCapture(..) => todo!(),
                     Instr::Copy(r, s) => this.define_effect(
                         *r as _,
                         Value {

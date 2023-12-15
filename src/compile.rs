@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     error::Error,
     fmt::Display,
     mem::{replace, take},
@@ -20,12 +20,14 @@ pub enum Instr {
     LoadField(RegIndex, RegIndex, Symbol),
     LoadRecord(RegIndex, Vec<(Symbol, RegIndex)>),
     LoadChunk(RegIndex, ChunkIndex),
+    LoadCapture(RegIndex, usize),
 
     Copy(RegIndex, RegIndex),
     Operator(RegIndex, Operator, Vec<RegIndex>),
     Apply(RegIndex, usize),
 
     StoreField(RegIndex, Symbol, RegIndex),
+    StoreCapture(RegIndex, usize, RegIndex),
 
     MatchField(RegIndex, Symbol, InstrIndex),
     Jump(InstrIndex),
@@ -64,8 +66,8 @@ pub struct Compiler {
     reg_index: RegIndex,
     scopes: Vec<HashMap<String, RegIndex>>,
     capture_scopes: Vec<HashMap<String, RegIndex>>,
-    captures: HashSet<String>,
-    forward_captures: HashMap<String, Vec<RegIndex>>,
+    captures: Vec<String>,
+    forward_captures: HashMap<String, Vec<(RegIndex, usize)>>,
     return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
@@ -141,13 +143,20 @@ impl Compiler {
         if !capturing {
             return Err(CompileErrorKind::NonCaptureResolveFail(name));
         }
-        let symbol = self.intern(name.clone());
+        if let Some(index) = self
+            .captures
+            .iter()
+            .position(|captured_name| name == *captured_name)
+        {
+            self.instrs.push(Instr::LoadCapture(self.reg_index, index));
+            return Ok(self.reg_index);
+        }
         for scope in self.capture_scopes.iter().rev() {
             if scope.get(&name).is_some() {
-                self.captures.insert(name.clone());
+                let index = self.captures.len();
+                self.captures.push(name.clone());
                 // is it always safe to directly use slot `self.reg_index`?
-                self.instrs
-                    .push(Instr::LoadField(self.reg_index, 0, symbol));
+                self.instrs.push(Instr::LoadCapture(self.reg_index, index));
                 return Ok(self.reg_index);
             }
         }
@@ -204,17 +213,17 @@ impl Compiler {
             }
             Expr::Abstraction(abstraction) => {
                 let arity = abstraction.variables.len();
-                let saved_captures = take(&mut self.captures);
+                let saved_captures = replace(&mut self.captures, abstraction.captures);
                 let saved_scopes = take(&mut self.scopes);
                 let saved_capture_scopes = self.capture_scopes.clone();
                 self.capture_scopes.extend(saved_scopes.clone());
                 let mut forward_scope = HashMap::new();
-                for name in abstraction.captures {
+                for (index, name) in self.captures.iter().enumerate() {
                     forward_scope.insert(name.clone(), RegIndex::MAX);
                     self.forward_captures
-                        .entry(name)
+                        .entry(name.clone())
                         .or_default()
-                        .push(reg_index)
+                        .push((reg_index, index))
                 }
                 self.capture_scopes.push(forward_scope.clone());
                 let mut scope = HashMap::new();
@@ -260,16 +269,18 @@ impl Compiler {
                 self.reg_index = reg_index + 1;
                 // println!("{} {:?}", chunk_index, self.quasi_scope);
                 // println!("{:?}", self.captures);
-                for name in replace(&mut self.captures, saved_captures) {
+                for (index, name) in replace(&mut self.captures, saved_captures)
+                    .into_iter()
+                    .enumerate()
+                {
                     if forward_scope.contains_key(&name) {
                         continue;
                     }
-                    let symbol = self.intern(name.clone());
                     let resolved = self
                         .resolve(name.clone(), true)
                         .unwrap_or_else(|kind| panic!("{}", CompileError(kind, offset)));
                     self.instrs
-                        .push(Instr::StoreField(reg_index, symbol, resolved))
+                        .push(Instr::StoreCapture(reg_index, index, resolved))
                 }
             }
             Expr::Variable(name) => {
@@ -294,10 +305,11 @@ impl Compiler {
                     self.description_hint = name.clone();
                     // println!("before {name}: {:?}", self.quasi_scope);
                     self.compile_expr(expr)?;
-                    let symbol = self.intern(name.clone());
-                    for reg_index in self.forward_captures.remove(&name).unwrap_or_default() {
+                    for (reg_index, index) in
+                        self.forward_captures.remove(&name).unwrap_or_default()
+                    {
                         self.instrs
-                            .push(Instr::StoreField(reg_index, symbol, reg_index))
+                            .push(Instr::StoreCapture(reg_index, index, reg_index))
                     }
                     self.scopes.last_mut().unwrap().insert(name, self.reg_index);
                     self.reg_index += 1

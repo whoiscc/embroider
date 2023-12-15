@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    compile::Symbol,
+    compile::{ChunkIndex, Symbol},
     eval::{EvalErrorKind, EvaluatorConsts, I},
     gc::Addr,
     Evaluator,
@@ -200,6 +200,16 @@ impl Value {
         r[0] = Value::U64(value);
         Ok(())
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Closure {
+    pub chunk_index: ChunkIndex,
+    pub captures: Vec<Value>,
+}
+
+impl ValueType for Closure {
+    fn trace(&self) {} // TODO
 }
 
 pub type Record = HashMap<Symbol, Value>;

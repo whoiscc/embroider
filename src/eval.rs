@@ -11,7 +11,7 @@ use crate::{
     compile::{Chunk, ChunkIndex, Compiler, Const, Instr, RegIndex, Symbol},
     gc::Allocator,
     sched::{Control, Worker},
-    value::{self, Record},
+    value::{self, Closure, Record},
     Value,
 };
 
@@ -51,7 +51,7 @@ pub struct EvalError(pub EvalErrorKind, pub ChunkIndex, pub usize);
 pub enum EvalErrorKind {
     TypeError(String, String),
     FieldError(String),
-    CaptureError(String),
+    CaptureError,
     Operator2TypeError(Operator, String, String),
     Operator1TypeError(Operator, String),
     ArityError(usize, usize),
@@ -205,12 +205,8 @@ impl Evaluator {
                     if let Some(value) = rj.get(symbol) {
                         r[i] = value.clone()
                     } else {
-                        Err(err(if rj.contains_key(&self.consts.symbol_chunk) {
-                            EvalErrorKind::CaptureError
-                        } else {
-                            EvalErrorKind::FieldError
-                        }(
-                            self.consts.symbols[*symbol].clone()
+                        Err(err(EvalErrorKind::FieldError(
+                            self.consts.symbols[*symbol].clone(),
                         )))?
                     }
                 }
@@ -224,11 +220,34 @@ impl Evaluator {
                     let rj = r[j].clone();
                     let ri = r[i].downcast_mut::<Record>().map_err(err)?;
                     let evicted = ri.insert(*symbol, rj);
-                    if evicted.is_none() && !ri.contains_key(&self.consts.symbol_chunk) {
+                    if evicted.is_none() {
                         Err(err(EvalErrorKind::FieldError(
                             self.consts.symbols[*symbol].clone(),
                         )))?
                     }
+                }
+                Instr::LoadCapture(i, index) => {
+                    let rj = r[0].downcast_ref::<Closure>().map_err(err)?;
+                    let value = rj.captures[*index].clone();
+                    if matches!(value, Value::Invalid) {
+                        Err(err(EvalErrorKind::CaptureError))?
+                    }
+                    r[i] = value
+                }
+                Instr::StoreCapture(i, index, j) => {
+                    if let Value::ChunkIndex(chunk_index) = r[i] {
+                        let closure = Closure {
+                            chunk_index,
+                            captures: Default::default(),
+                        };
+                        r[i] = Value::Dyn(self.allocator.alloc(closure))
+                    }
+                    let rj = r[j].clone();
+                    let ri = r[i].downcast_mut::<Closure>().map_err(err)?;
+                    if ri.captures.len() <= *index {
+                        ri.captures.resize(index + 1, Value::Invalid)
+                    }
+                    ri.captures[*index] = rj
                 }
                 Instr::Copy(i, j) => r[i] = r[j].clone(),
                 Instr::Operator(i, op, xs) => {
@@ -309,16 +328,7 @@ impl Evaluator {
                         // println!("apply simple chunk");
                         index
                     } else {
-                        let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                        if let Some(Value::ChunkIndex(index)) = ri.get(&self.consts.symbol_chunk) {
-                            // println!("apply closure");
-                            *index
-                        } else {
-                            Err(err(EvalErrorKind::TypeError(
-                                "Record".into(),
-                                "(Abstraction)".into(),
-                            )))?
-                        }
+                        r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
                     };
                     if *arity != self.consts.chunks[chunk_index].arity {
                         Err(err(EvalErrorKind::ArityError(
@@ -362,24 +372,23 @@ impl Evaluator {
                 }
                 Instr::Jump(instr) => frame.instr_pointer = *instr,
                 Instr::Spawn(i) => {
-                    let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                    let Some(Value::ChunkIndex(chunk_index)) = ri.get(&self.consts.symbol_chunk)
-                    else {
-                        Err(err(EvalErrorKind::TypeError(
-                            "Record".into(),
-                            "(Abstraction)".into(),
-                        )))?
+                    // repeating `Apply`
+                    let chunk_index = if let Value::ChunkIndex(index) = r[i] {
+                        // println!("apply simple chunk");
+                        index
+                    } else {
+                        r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
                     };
-                    if self.consts.chunks[*chunk_index].arity != 0 {
+                    if self.consts.chunks[chunk_index].arity != 0 {
                         Err(err(EvalErrorKind::ArityError(
-                            self.consts.chunks[*chunk_index].arity,
+                            self.consts.chunks[chunk_index].arity,
                             0,
                         )))?
                     }
-                    if self.consts.intrinsics.contains_key(chunk_index) {
-                        Err(err(EvalErrorKind::SpawnIntrinsicError(*chunk_index)))?
+                    if self.consts.intrinsics.contains_key(&chunk_index) {
+                        Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
                     }
-                    worker.spawn(*chunk_index, r[i].clone())?
+                    worker.spawn(chunk_index, r[i].clone())?
                 }
                 Instr::LoadControl(i) => {
                     r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
