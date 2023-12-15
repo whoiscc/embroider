@@ -10,3 +10,4 @@ members = [".", "bindings/*", "app"]
 anyhow = { version = "1.0.75", features = ["backtrace"] }
 crossbeam-channel = "0.5.8"
 peg = "0.8.2"
+petgraph = "0.6.4"
