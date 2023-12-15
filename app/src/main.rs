@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
 
     let group = StopGroup::default();
     let workers = workers
-        .map(|mut worker| group.spawn(move |stop_rx| worker.run(stop_rx)))
+        .map(|worker| group.spawn(worker))
         .take(std::thread::available_parallelism()?.get())
         .collect::<Vec<_>>();
     drop(group);

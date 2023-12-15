@@ -143,13 +143,10 @@ impl Default for StopGroup {
 }
 
 impl StopGroup {
-    pub fn spawn(
-        &self,
-        task: impl FnOnce(Receiver<()>) -> anyhow::Result<()> + Send + 'static,
-    ) -> std::thread::JoinHandle<anyhow::Result<()>> {
+    pub fn spawn(&self, mut worker: Worker) -> std::thread::JoinHandle<anyhow::Result<()>> {
         let this = self.clone();
         std::thread::spawn(move || {
-            let result = task(this.rx);
+            let result = worker.run(this.rx);
             while this.tx.send(()).is_ok() {}
             result
         })
