@@ -164,259 +164,331 @@ impl Evaluator {
     }
 
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
-        while let Some(frame) = self.frames.last_mut() {
+        'next: while let Some(frame) = self.frames.last_mut() {
             let chunk = &self.consts.chunks[frame.chunk_index];
-            let instr = &chunk.instrs[frame.instr_pointer];
-            let err = {
-                let chunk_index = frame.chunk_index;
-                let instr_pointer = frame.instr_pointer;
-                move |kind| EvalError(kind, chunk_index, instr_pointer)
-            };
-            frame.instr_pointer += 1;
-            let mut r = I(&mut self.registers, frame.base_pointer);
-            // println!("{instr:?}");
-            match instr {
-                Instr::LoadUnit(i) => r[i] = Value::Unit,
-                Instr::LoadConst(i, const_index) => {
-                    r[i] = match chunk.consts[*const_index].clone() {
-                        Const::I32(integer) => Value::I32(integer),
-                        Const::String(string) => {
-                            Value::Dyn(self.allocator.alloc(value::String(string)))
-                        }
-                    }
-                }
-                Instr::LoadRecord(i, rows) => {
-                    let record = rows
-                        .iter()
-                        .map(|(symbol, i)| (*symbol, r[i].clone()))
-                        .collect::<Record>();
-                    r[i] = Value::Dyn(self.allocator.alloc(record))
-                }
-                Instr::LoadChunk(i, chunk_index) => r[i] = Value::ChunkIndex(*chunk_index),
-                Instr::LoadField(i, j, symbol) => {
-                    let rj = r[j].downcast_ref::<Record>().map_err(err)?;
-                    if let Some(value) = rj.get(symbol) {
-                        r[i] = value.clone()
-                    } else {
-                        Err(err(EvalErrorKind::FieldError(
-                            self.consts.symbols[*symbol].clone(),
-                        )))?
-                    }
-                }
-                Instr::StoreField(i, symbol, j) => {
-                    if matches!(r[i], Value::ChunkIndex(_)) {
-                        // println!("chunk -> closure");
-                        let mut record = HashMap::new();
-                        record.insert(self.consts.symbol_chunk, r[i].clone());
-                        r[i] = Value::Dyn(self.allocator.alloc(record));
-                    }
-                    let rj = r[j].clone();
-                    let ri = r[i].downcast_mut::<Record>().map_err(err)?;
-                    let evicted = ri.insert(*symbol, rj);
-                    if evicted.is_none() {
-                        Err(err(EvalErrorKind::FieldError(
-                            self.consts.symbols[*symbol].clone(),
-                        )))?
-                    }
-                }
-                Instr::LoadCapture(i, index) => {
-                    // should always success actually
-                    let rj = frame.closure.downcast_ref::<Closure>().map_err(err)?;
-                    let value = rj.captures[*index].clone();
-                    if matches!(value, Value::Invalid) {
-                        Err(err(EvalErrorKind::CaptureError))?
-                    }
-                    r[i] = value
-                }
-                Instr::StoreCapture(i, index, j) => {
-                    if let Value::ChunkIndex(chunk_index) = r[i] {
-                        let closure = Closure {
-                            chunk_index,
-                            captures: Default::default(),
-                        };
-                        r[i] = Value::Dyn(self.allocator.alloc(closure))
-                    }
-                    let rj = r[j].clone();
-                    let ri = r[i].downcast_mut::<Closure>().map_err(err)?;
-                    if ri.captures.len() <= *index {
-                        ri.captures.resize(index + 1, Value::Invalid)
-                    }
-                    ri.captures[*index] = rj
-                }
-                Instr::Copy(i, j) => r[i] = r[j].clone(),
-                Instr::Operator(i, op, xs) => {
-                    r[i] = if xs.len() == 2 {
-                        match (op, &r[&xs[0]], &r[&xs[1]]) {
-                            (Operator::Add, Value::I32(a), Value::I32(b)) => Value::I32(*a + *b),
-                            (Operator::Sub, Value::I32(a), Value::I32(b)) => Value::I32(*a - *b),
-                            (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(*a * *b),
-                            (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(*a / *b),
-                            (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(*a % *b),
-                            (Operator::Eq, Value::I32(a), Value::I32(b)) => Value::Bool(*a == *b),
-                            (Operator::Ne, Value::I32(a), Value::I32(b)) => Value::Bool(*a != *b),
-                            (Operator::Lt, Value::I32(a), Value::I32(b)) => Value::Bool(*a < *b),
-                            (Operator::Gt, Value::I32(a), Value::I32(b)) => Value::Bool(*a > *b),
-                            (Operator::Le, Value::I32(a), Value::I32(b)) => Value::Bool(*a <= *b),
-                            (Operator::Ge, Value::I32(a), Value::I32(b)) => Value::Bool(*a >= *b),
-
-                            (Operator::Add, Value::F64(a), Value::F64(b)) => Value::F64(*a + *b),
-                            (Operator::Sub, Value::F64(a), Value::F64(b)) => Value::F64(*a - *b),
-                            (Operator::Mul, Value::F64(a), Value::F64(b)) => Value::F64(*a * *b),
-                            (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
-                            (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
-
-                            (Operator::Add, Value::U64(a), Value::U64(b)) => Value::U64(*a + *b),
-                            (Operator::Sub, Value::U64(a), Value::U64(b)) => Value::U64(*a - *b),
-                            (Operator::Mul, Value::U64(a), Value::U64(b)) => Value::U64(*a * *b),
-                            (Operator::Div, Value::U64(a), Value::U64(b)) => Value::U64(*a / *b),
-                            (Operator::Rem, Value::U64(a), Value::U64(b)) => Value::U64(*a % *b),
-                            (Operator::Eq, Value::U64(a), Value::U64(b)) => Value::Bool(*a == *b),
-                            (Operator::Ne, Value::U64(a), Value::U64(b)) => Value::Bool(*a != *b),
-                            (Operator::Lt, Value::U64(a), Value::U64(b)) => Value::Bool(*a < *b),
-                            (Operator::Gt, Value::U64(a), Value::U64(b)) => Value::Bool(*a > *b),
-                            (Operator::Le, Value::U64(a), Value::U64(b)) => Value::Bool(*a <= *b),
-                            (Operator::Ge, Value::U64(a), Value::U64(b)) => Value::Bool(*a >= *b),
-                            (Operator::Lsh, Value::U64(a), Value::U64(b)) => Value::U64(*a << *b),
-                            (Operator::Rsh, Value::U64(a), Value::U64(b)) => Value::U64(*a >> *b),
-                            (Operator::Xor, Value::U64(a), Value::U64(b)) => Value::U64(*a ^ *b),
-                            (Operator::Band, Value::U64(a), Value::U64(b)) => Value::U64(*a & *b),
-                            (Operator::Bor, Value::U64(a), Value::U64(b)) => Value::U64(*a | *b),
-
-                            (Operator::Add, a, b) => {
-                                if let (Ok(a), Ok(b)) = (
-                                    a.downcast_ref::<value::String>(),
-                                    b.downcast_ref::<value::String>(),
-                                ) {
-                                    Value::Dyn(
-                                        self.allocator
-                                            .alloc(value::String(String::from(a.clone()) + b)),
-                                    )
-                                } else {
-                                    Err(err(EvalErrorKind::Operator2TypeError(
-                                        *op,
-                                        r[&xs[0]].type_name().into(),
-                                        r[&xs[1]].type_name().into(),
-                                    )))?
-                                }
+            for instr in &chunk.instrs[frame.instr_pointer..] {
+                // let instr = &chunk.instrs[frame.instr_pointer];
+                let err = {
+                    let chunk_index = frame.chunk_index;
+                    let instr_pointer = frame.instr_pointer;
+                    move |kind| EvalError(kind, chunk_index, instr_pointer)
+                };
+                frame.instr_pointer += 1;
+                let mut r = I(&mut self.registers, frame.base_pointer);
+                // println!("{instr:?}");
+                match instr {
+                    Instr::LoadUnit(i) => r[i] = Value::Unit,
+                    Instr::LoadConst(i, const_index) => {
+                        r[i] = match chunk.consts[*const_index].clone() {
+                            Const::I32(integer) => Value::I32(integer),
+                            Const::String(string) => {
+                                Value::Dyn(self.allocator.alloc(value::String(string)))
                             }
-                            _ => Err(err(EvalErrorKind::Operator2TypeError(
-                                *op,
-                                r[&xs[0]].type_name().into(),
-                                r[&xs[1]].type_name().into(),
-                            )))?,
                         }
-                    } else if xs.len() == 1 {
-                        match (op, &r[&xs[0]]) {
-                            (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
-                            _ => Err(err(EvalErrorKind::Operator1TypeError(
-                                *op,
-                                r[&xs[0]].type_name().into(),
-                            )))?,
-                        }
-                    } else {
-                        unreachable!()
                     }
-                }
-                Instr::Apply(i, arity) => {
-                    let chunk_index = if let Value::ChunkIndex(index) = r[i] {
-                        // println!("apply simple chunk");
-                        index
-                    } else {
-                        r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
-                    };
-                    if *arity != self.consts.chunks[chunk_index].arity {
-                        Err(err(EvalErrorKind::ArityError(
-                            *arity,
-                            self.consts.chunks[chunk_index].arity,
-                        )))?
+                    Instr::LoadRecord(i, rows) => {
+                        let record = rows
+                            .iter()
+                            .map(|(symbol, i)| (*symbol, r[i].clone()))
+                            .collect::<Record>();
+                        r[i] = Value::Dyn(self.allocator.alloc(record))
                     }
-                    if let Some(intrinsic) = self.consts.intrinsics.get(&chunk_index) {
-                        self.intrinsic_base_pointer = frame.base_pointer + *i as usize + 1;
-                        let i = *i;
-                        intrinsic(self).map_err(err)?;
-                        let mut r = I(
-                            &mut self.registers,
-                            self.frames.last().unwrap().base_pointer,
-                        );
-                        r[i] = r[i + 1].clone()
-                    } else {
-                        let frame = Frame {
-                            closure: r[i].clone(),
-                            chunk_index,
-                            base_pointer: frame.base_pointer + *i as usize + 1,
-                            instr_pointer: 0,
-                        };
-                        let new_len =
-                            frame.base_pointer + self.consts.chunks[chunk_index].reg_count;
-                        if self.registers.len() < new_len {
-                            self.registers.resize(new_len, Value::Invalid)
-                        }
-                        // println!("{frame:?}");
-                        self.frames.push(frame)
-                    }
-                }
-                Instr::MatchField(i, symbol, instr) => {
-                    let matched = if let Value::Bool(b) = r[i] {
-                        if b {
-                            *symbol == self.consts.symbol_true
+                    Instr::LoadChunk(i, chunk_index) => r[i] = Value::ChunkIndex(*chunk_index),
+                    Instr::LoadField(i, j, symbol) => {
+                        let rj = r[j].downcast_ref::<Record>().map_err(err)?;
+                        if let Some(value) = rj.get(symbol) {
+                            r[i] = value.clone()
                         } else {
-                            *symbol == self.consts.symbol_false
-                        }
-                    } else {
-                        let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                        if ri.contains_key(&self.consts.symbol_chunk) {
-                            Err(err(EvalErrorKind::TypeError(
-                                "(Abstraction)".into(),
-                                "Record".into(),
+                            Err(err(EvalErrorKind::FieldError(
+                                self.consts.symbols[*symbol].clone(),
                             )))?
                         }
-                        ri.contains_key(symbol)
-                    };
-                    if !matched {
-                        frame.instr_pointer = *instr
                     }
-                }
-                Instr::Jump(instr) => frame.instr_pointer = *instr,
-                Instr::Return(i) => {
-                    let ri = r[i].clone();
-                    let frame = self.frames.pop().unwrap();
-                    // workaround before updating `Apply`
-                    if !self.frames.is_empty() {
-                        self.registers[frame.base_pointer - 1] = ri
-                        // TODO
-                        // self.registers.truncate(frame.base_pointer)
+                    Instr::StoreField(i, symbol, j) => {
+                        if matches!(r[i], Value::ChunkIndex(_)) {
+                            // println!("chunk -> closure");
+                            let mut record = HashMap::new();
+                            record.insert(self.consts.symbol_chunk, r[i].clone());
+                            r[i] = Value::Dyn(self.allocator.alloc(record));
+                        }
+                        let rj = r[j].clone();
+                        let ri = r[i].downcast_mut::<Record>().map_err(err)?;
+                        let evicted = ri.insert(*symbol, rj);
+                        if evicted.is_none() {
+                            Err(err(EvalErrorKind::FieldError(
+                                self.consts.symbols[*symbol].clone(),
+                            )))?
+                        }
                     }
-                }
-                Instr::Spawn(i) => {
-                    // repeating `Apply`
-                    let chunk_index = if let Value::ChunkIndex(index) = r[i] {
-                        // println!("apply simple chunk");
-                        index
-                    } else {
-                        r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
-                    };
-                    if self.consts.chunks[chunk_index].arity != 0 {
-                        Err(err(EvalErrorKind::ArityError(
-                            self.consts.chunks[chunk_index].arity,
-                            0,
-                        )))?
+                    Instr::LoadCapture(i, index) => {
+                        // should always success actually
+                        let rj = frame.closure.downcast_ref::<Closure>().map_err(err)?;
+                        let value = rj.captures[*index].clone();
+                        if matches!(value, Value::Invalid) {
+                            Err(err(EvalErrorKind::CaptureError))?
+                        }
+                        r[i] = value
                     }
-                    if self.consts.intrinsics.contains_key(&chunk_index) {
-                        Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
+                    Instr::StoreCapture(i, index, j) => {
+                        if let Value::ChunkIndex(chunk_index) = r[i] {
+                            let closure = Closure {
+                                chunk_index,
+                                captures: Default::default(),
+                            };
+                            r[i] = Value::Dyn(self.allocator.alloc(closure))
+                        }
+                        let rj = r[j].clone();
+                        let ri = r[i].downcast_mut::<Closure>().map_err(err)?;
+                        if ri.captures.len() <= *index {
+                            ri.captures.resize(index + 1, Value::Invalid)
+                        }
+                        ri.captures[*index] = rj
                     }
-                    worker.spawn(chunk_index, r[i].clone())?
-                }
-                Instr::LoadControl(i) => {
-                    r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
-                }
-                Instr::Suspend(i) => {
-                    r[i].downcast_ref::<Control>().map_err(err)?; // just check
-                    worker.suspend(r[i].clone());
-                    break;
-                }
-                Instr::Resume(i) => {
-                    let ri = r[i].downcast_ref::<Control>().map_err(err)?;
-                    ri.resume()?
+                    Instr::Copy(i, j) => r[i] = r[j].clone(),
+                    Instr::Operator(i, op, xs) => {
+                        r[i] = if xs.len() == 2 {
+                            match (op, &r[&xs[0]], &r[&xs[1]]) {
+                                (Operator::Add, Value::I32(a), Value::I32(b)) => {
+                                    Value::I32(*a + *b)
+                                }
+                                (Operator::Sub, Value::I32(a), Value::I32(b)) => {
+                                    Value::I32(*a - *b)
+                                }
+                                (Operator::Mul, Value::I32(a), Value::I32(b)) => {
+                                    Value::I32(*a * *b)
+                                }
+                                (Operator::Div, Value::I32(a), Value::I32(b)) => {
+                                    Value::I32(*a / *b)
+                                }
+                                (Operator::Rem, Value::I32(a), Value::I32(b)) => {
+                                    Value::I32(*a % *b)
+                                }
+                                (Operator::Eq, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a == *b)
+                                }
+                                (Operator::Ne, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a != *b)
+                                }
+                                (Operator::Lt, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a < *b)
+                                }
+                                (Operator::Gt, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a > *b)
+                                }
+                                (Operator::Le, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a <= *b)
+                                }
+                                (Operator::Ge, Value::I32(a), Value::I32(b)) => {
+                                    Value::Bool(*a >= *b)
+                                }
+
+                                (Operator::Add, Value::F64(a), Value::F64(b)) => {
+                                    Value::F64(*a + *b)
+                                }
+                                (Operator::Sub, Value::F64(a), Value::F64(b)) => {
+                                    Value::F64(*a - *b)
+                                }
+                                (Operator::Mul, Value::F64(a), Value::F64(b)) => {
+                                    Value::F64(*a * *b)
+                                }
+                                (Operator::Div, Value::F64(a), Value::F64(b)) => {
+                                    Value::F64(*a / *b)
+                                }
+                                (Operator::Rem, Value::F64(a), Value::F64(b)) => {
+                                    Value::F64(*a % *b)
+                                }
+
+                                (Operator::Add, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a + *b)
+                                }
+                                (Operator::Sub, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a - *b)
+                                }
+                                (Operator::Mul, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a * *b)
+                                }
+                                (Operator::Div, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a / *b)
+                                }
+                                (Operator::Rem, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a % *b)
+                                }
+                                (Operator::Eq, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a == *b)
+                                }
+                                (Operator::Ne, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a != *b)
+                                }
+                                (Operator::Lt, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a < *b)
+                                }
+                                (Operator::Gt, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a > *b)
+                                }
+                                (Operator::Le, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a <= *b)
+                                }
+                                (Operator::Ge, Value::U64(a), Value::U64(b)) => {
+                                    Value::Bool(*a >= *b)
+                                }
+                                (Operator::Lsh, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a << *b)
+                                }
+                                (Operator::Rsh, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a >> *b)
+                                }
+                                (Operator::Xor, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a ^ *b)
+                                }
+                                (Operator::Band, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a & *b)
+                                }
+                                (Operator::Bor, Value::U64(a), Value::U64(b)) => {
+                                    Value::U64(*a | *b)
+                                }
+
+                                (Operator::Add, a, b) => {
+                                    if let (Ok(a), Ok(b)) = (
+                                        a.downcast_ref::<value::String>(),
+                                        b.downcast_ref::<value::String>(),
+                                    ) {
+                                        Value::Dyn(
+                                            self.allocator
+                                                .alloc(value::String(String::from(a.clone()) + b)),
+                                        )
+                                    } else {
+                                        Err(err(EvalErrorKind::Operator2TypeError(
+                                            *op,
+                                            r[&xs[0]].type_name().into(),
+                                            r[&xs[1]].type_name().into(),
+                                        )))?
+                                    }
+                                }
+                                _ => Err(err(EvalErrorKind::Operator2TypeError(
+                                    *op,
+                                    r[&xs[0]].type_name().into(),
+                                    r[&xs[1]].type_name().into(),
+                                )))?,
+                            }
+                        } else if xs.len() == 1 {
+                            match (op, &r[&xs[0]]) {
+                                (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
+                                _ => Err(err(EvalErrorKind::Operator1TypeError(
+                                    *op,
+                                    r[&xs[0]].type_name().into(),
+                                )))?,
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    Instr::Apply(i, arity) => {
+                        let chunk_index = if let Value::ChunkIndex(index) = r[i] {
+                            // println!("apply simple chunk");
+                            index
+                        } else {
+                            r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
+                        };
+                        if *arity != self.consts.chunks[chunk_index].arity {
+                            Err(err(EvalErrorKind::ArityError(
+                                *arity,
+                                self.consts.chunks[chunk_index].arity,
+                            )))?
+                        }
+                        if let Some(intrinsic) = self.consts.intrinsics.get(&chunk_index) {
+                            self.intrinsic_base_pointer = frame.base_pointer + *i as usize + 1;
+                            let i = *i;
+                            intrinsic(self).map_err(err)?;
+                            let mut r = I(
+                                &mut self.registers,
+                                self.frames.last().unwrap().base_pointer,
+                            );
+                            r[i] = r[i + 1].clone()
+                        } else {
+                            let frame = Frame {
+                                closure: r[i].clone(),
+                                chunk_index,
+                                base_pointer: frame.base_pointer + *i as usize + 1,
+                                instr_pointer: 0,
+                            };
+                            let new_len =
+                                frame.base_pointer + self.consts.chunks[chunk_index].reg_count;
+                            if self.registers.len() < new_len {
+                                self.registers.resize(new_len, Value::Invalid)
+                            }
+                            // println!("{frame:?}");
+                            self.frames.push(frame)
+                        }
+                        continue 'next;
+                    }
+                    Instr::MatchField(i, symbol, instr) => {
+                        let matched = if let Value::Bool(b) = r[i] {
+                            if b {
+                                *symbol == self.consts.symbol_true
+                            } else {
+                                *symbol == self.consts.symbol_false
+                            }
+                        } else {
+                            let ri = r[i].downcast_ref::<Record>().map_err(err)?;
+                            if ri.contains_key(&self.consts.symbol_chunk) {
+                                Err(err(EvalErrorKind::TypeError(
+                                    "(Abstraction)".into(),
+                                    "Record".into(),
+                                )))?
+                            }
+                            ri.contains_key(symbol)
+                        };
+                        if !matched {
+                            frame.instr_pointer = *instr;
+                            continue 'next;
+                        }
+                    }
+                    Instr::Jump(instr) => {
+                        frame.instr_pointer = *instr;
+                        continue 'next;
+                    }
+                    Instr::Return(i) => {
+                        let ri = r[i].clone();
+                        let frame = self.frames.pop().unwrap();
+                        // workaround before updating `Apply`
+                        if !self.frames.is_empty() {
+                            self.registers[frame.base_pointer - 1] = ri
+                            // TODO
+                            // self.registers.truncate(frame.base_pointer)
+                        }
+                        continue 'next;
+                    }
+                    Instr::Spawn(i) => {
+                        // repeating `Apply`
+                        let chunk_index = if let Value::ChunkIndex(index) = r[i] {
+                            // println!("apply simple chunk");
+                            index
+                        } else {
+                            r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
+                        };
+                        if self.consts.chunks[chunk_index].arity != 0 {
+                            Err(err(EvalErrorKind::ArityError(
+                                self.consts.chunks[chunk_index].arity,
+                                0,
+                            )))?
+                        }
+                        if self.consts.intrinsics.contains_key(&chunk_index) {
+                            Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
+                        }
+                        worker.spawn(chunk_index, r[i].clone())?
+                    }
+                    Instr::LoadControl(i) => {
+                        r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
+                    }
+                    Instr::Suspend(i) => {
+                        r[i].downcast_ref::<Control>().map_err(err)?; // just check
+                        worker.suspend(r[i].clone());
+                        break 'next;
+                    }
+                    Instr::Resume(i) => {
+                        let ri = r[i].downcast_ref::<Control>().map_err(err)?;
+                        ri.resume()?
+                    }
                 }
             }
             // println!("{:?}", self.registers);
