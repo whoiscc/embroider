@@ -67,10 +67,10 @@ impl Worker {
         }
     }
 
-    pub fn spawn(&self, chunk_value: Value) -> anyhow::Result<()> {
+    pub fn spawn(&self, chunk_index: ChunkIndex, closure: Value) -> anyhow::Result<()> {
         self.task_count.fetch_add(1, SeqCst);
         let mut task = Evaluator::new(self.eval_consts.clone(), Allocator::default());
-        task.push_entry_frame(chunk_value);
+        task.push_entry_frame(chunk_index, closure);
         self.ready_tx
             .send(task)
             .map_err(|_| anyhow::anyhow!("disconnected"))
@@ -117,7 +117,7 @@ pub fn new_system(
 
     let eval_consts = eval_consts.into();
     let mut task = Evaluator::new(eval_consts.clone(), Allocator::default());
-    task.push_entry_frame(Value::ChunkIndex(chunk_index));
+    task.push_entry_frame(chunk_index, Value::ChunkIndex(chunk_index));
     ready_tx.send(task).unwrap();
 
     repeat(Worker {
@@ -146,6 +146,7 @@ impl StopGroup {
     pub fn spawn(&self, mut worker: Worker) -> std::thread::JoinHandle<anyhow::Result<()>> {
         let this = self.clone();
         std::thread::spawn(move || {
+            // TODO handle panic
             let result = worker.run(this.rx);
             while this.tx.send(()).is_ok() {}
             result

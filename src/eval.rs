@@ -39,7 +39,8 @@ type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
 
 #[derive(Debug)]
 struct Frame {
-    chunk_value: Value,
+    closure: Value,
+    chunk_index: ChunkIndex,
     base_pointer: usize,
     instr_pointer: usize,
 }
@@ -129,9 +130,9 @@ impl Index<RegIndex> for I<'_> {
 impl IndexMut<RegIndex> for I<'_> {
     fn index_mut(&mut self, index: RegIndex) -> &mut Self::Output {
         let offset = self.1 + index as usize;
-        if self.0.len() <= offset {
-            self.0.resize(offset + 1, Value::Invalid)
-        }
+        // if self.0.len() <= offset {
+        //     self.0.resize(offset + 1, Value::Invalid)
+        // }
         &mut self.0[offset]
     }
 }
@@ -150,30 +151,21 @@ impl IndexMut<&RegIndex> for I<'_> {
 }
 
 impl Evaluator {
-    pub fn push_entry_frame(&mut self, chunk_value: Value) {
+    pub fn push_entry_frame(&mut self, chunk_index: ChunkIndex, closure: Value) {
         assert!(self.frames.is_empty());
+        self.registers
+            .resize(self.consts.chunks[chunk_index].reg_count, Value::Invalid);
         self.frames.push(Frame {
-            chunk_value,
+            closure,
+            chunk_index,
             base_pointer: 0,
             instr_pointer: 0,
         })
     }
 
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
-        let mut chunk_index = ChunkIndex::MAX;
-        let mut update_chunk_index = true;
         while let Some(frame) = self.frames.last_mut() {
-            if update_chunk_index {
-                chunk_index = if let Value::ChunkIndex(index) = frame.chunk_value {
-                    index
-                } else if let Ok(closure) = frame.chunk_value.downcast_ref::<Closure>() {
-                    closure.chunk_index
-                } else {
-                    unreachable!()
-                };
-                update_chunk_index = false
-            }
-            let chunk = &self.consts.chunks[chunk_index];
+            let chunk = &self.consts.chunks[frame.chunk_index];
             let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {
                 assert_eq!(frame.instr_pointer, chunk.instrs.len());
                 let frame = self.frames.pop().unwrap();
@@ -181,13 +173,14 @@ impl Evaluator {
                 if !self.frames.is_empty() {
                     self.registers[frame.base_pointer - 1] =
                         self.registers[frame.base_pointer].clone();
-                    self.registers.truncate(frame.base_pointer)
+                    // TODO
+                    // self.registers.truncate(frame.base_pointer)
                 }
-                update_chunk_index = true;
                 continue;
             };
 
             let err = {
+                let chunk_index = frame.chunk_index;
                 let instr_pointer = frame.instr_pointer;
                 move |kind| EvalError(kind, chunk_index, instr_pointer)
             };
@@ -240,7 +233,7 @@ impl Evaluator {
                 }
                 Instr::LoadCapture(i, index) => {
                     // should always success actually
-                    let rj = frame.chunk_value.downcast_ref::<Closure>().map_err(err)?;
+                    let rj = frame.closure.downcast_ref::<Closure>().map_err(err)?;
                     let value = rj.captures[*index].clone();
                     if matches!(value, Value::Invalid) {
                         Err(err(EvalErrorKind::CaptureError))?
@@ -360,14 +353,19 @@ impl Evaluator {
                         r[i] = r[i + 1].clone()
                     } else {
                         let frame = Frame {
-                            chunk_value: r[i].clone(),
+                            closure: r[i].clone(),
+                            chunk_index,
                             base_pointer: frame.base_pointer + *i as usize + 1,
                             instr_pointer: 0,
                         };
+                        let new_len =
+                            frame.base_pointer + self.consts.chunks[chunk_index].reg_count;
+                        if self.registers.len() < new_len {
+                            self.registers.resize(new_len, Value::Invalid)
+                        }
                         // println!("{frame:?}");
                         self.frames.push(frame)
                     }
-                    update_chunk_index = true
                 }
                 Instr::MatchField(i, symbol, instr) => {
                     let matched = if let Value::Bool(b) = r[i] {
@@ -408,7 +406,7 @@ impl Evaluator {
                     if self.consts.intrinsics.contains_key(&chunk_index) {
                         Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
                     }
-                    worker.spawn(r[i].clone())?
+                    worker.spawn(chunk_index, r[i].clone())?
                 }
                 Instr::LoadControl(i) => {
                     r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))

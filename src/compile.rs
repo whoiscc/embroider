@@ -50,6 +50,7 @@ pub struct Chunk {
     pub arity: usize,
     pub instrs: Vec<Instr>,
     pub consts: Vec<Const>,
+    pub reg_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -64,6 +65,7 @@ pub struct Compiler {
     instrs: Vec<Instr>,
     consts: Vec<Const>,
     reg_index: RegIndex,
+    reg_count: usize,
     scopes: Vec<HashMap<String, RegIndex>>,
     capture_scopes: Vec<HashMap<String, RegIndex>>,
     captures: Vec<String>,
@@ -106,14 +108,17 @@ impl Compiler {
     }
 
     pub fn compile_module(&mut self, name: String, expr: ExprO) -> anyhow::Result<ChunkIndex> {
-        let saved_instrs = take(&mut self.instrs);
-        let saved_consts = take(&mut self.consts);
+        assert!(self.instrs.is_empty());
+        assert!(self.consts.is_empty());
+        assert_eq!(self.reg_index, 0);
+        assert_eq!(self.reg_count, 0);
         self.compile_expr(expr)?;
         let chunk = Chunk {
             description: name.clone(),
             arity: 0,
-            instrs: replace(&mut self.instrs, saved_instrs),
-            consts: replace(&mut self.consts, saved_consts),
+            instrs: take(&mut self.instrs),
+            consts: take(&mut self.consts),
+            reg_count: take(&mut self.reg_count),
         };
         let chunk_index = if let Some(chunk_index) = self.module_placeholders.remove(&name) {
             self.chunks[chunk_index] = chunk;
@@ -169,6 +174,7 @@ impl Compiler {
     // return, break and continue does not follow this convention
     fn compile_expr(&mut self, expr: ExprO) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
+        self.reg_count = self.reg_count.max(reg_index as usize + 1);
         if reg_index == RegIndex::MAX {
             Err(CompileError(CompileErrorKind::RegisterExhausted, expr.1))?
         }
@@ -237,6 +243,7 @@ impl Compiler {
                 let saved_instrs = take(&mut self.instrs);
                 let saved_consts = take(&mut self.consts);
                 self.reg_index = arity as _;
+                let saved_reg_count = take(&mut self.reg_count);
                 // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
                 self.instrs.push(Instr::Copy(0, arity as _));
@@ -255,6 +262,7 @@ impl Compiler {
                     arity,
                     instrs: replace(&mut self.instrs, saved_instrs),
                     consts: replace(&mut self.consts, saved_consts),
+                    reg_count: replace(&mut self.reg_count, saved_reg_count),
                 };
                 self.chunks.push(chunk);
                 if let Some(lang) = abstraction.lang {
@@ -492,7 +500,11 @@ pub struct DisassembleChunk<'a> {
 impl Display for DisassembleChunk<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let chunk = &self.compiler.chunks[self.chunk_index];
-        writeln!(f, "chunk {} {}", self.chunk_index, chunk.description)?;
+        writeln!(
+            f,
+            "chunk {} {} #reg {}",
+            self.chunk_index, chunk.description, chunk.reg_count
+        )?;
         for (index, instr) in chunk.instrs.iter().enumerate() {
             write!(f, "  {index:>4} {instr:?}")?;
             match instr {
