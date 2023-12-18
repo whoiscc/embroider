@@ -166,19 +166,7 @@ impl Evaluator {
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
         while let Some(frame) = self.frames.last_mut() {
             let chunk = &self.consts.chunks[frame.chunk_index];
-            let Some(instr) = chunk.instrs.get(frame.instr_pointer) else {
-                assert_eq!(frame.instr_pointer, chunk.instrs.len());
-                let frame = self.frames.pop().unwrap();
-                // workaround before updating `Apply`
-                if !self.frames.is_empty() {
-                    self.registers[frame.base_pointer - 1] =
-                        self.registers[frame.base_pointer].clone();
-                    // TODO
-                    // self.registers.truncate(frame.base_pointer)
-                }
-                continue;
-            };
-
+            let instr = &chunk.instrs[frame.instr_pointer];
             let err = {
                 let chunk_index = frame.chunk_index;
                 let instr_pointer = frame.instr_pointer;
@@ -389,6 +377,16 @@ impl Evaluator {
                     }
                 }
                 Instr::Jump(instr) => frame.instr_pointer = *instr,
+                Instr::Return(i) => {
+                    let ri = r[i].clone();
+                    let frame = self.frames.pop().unwrap();
+                    // workaround before updating `Apply`
+                    if !self.frames.is_empty() {
+                        self.registers[frame.base_pointer - 1] = ri
+                        // TODO
+                        // self.registers.truncate(frame.base_pointer)
+                    }
+                }
                 Instr::Spawn(i) => {
                     // repeating `Apply`
                     let chunk_index = if let Value::ChunkIndex(index) = r[i] {

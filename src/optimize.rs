@@ -144,13 +144,8 @@ impl Chunk {
                 Instr::MatchField(r, symbol, index) => {
                     ExitControl::Match(*r as _, *symbol, exit_index + 1, *index)
                 }
-                Instr::Jump(index) => {
-                    if *index == instrs.len() {
-                        ExitControl::Return(0)
-                    } else {
-                        ExitControl::Jump(*index)
-                    }
-                }
+                Instr::Jump(index) => ExitControl::Jump(*index),
+                Instr::Return(r) => ExitControl::Return(*r as _),
                 _ => {
                     end += 1;
                     if exit_index + 1 == instrs.len() {
@@ -233,7 +228,7 @@ impl Chunk {
                     Instr::Spawn(r) => Effect::Spawn(*r as _),
                     Instr::Suspend(r) => Effect::Suspend(*r as _),
                     Instr::Resume(r) => Effect::Resume(*r as _),
-                    Instr::MatchField(..) | Instr::Jump(_) => unreachable!(),
+                    Instr::MatchField(..) | Instr::Jump(_) | Instr::Return(_) => unreachable!(),
                 })
                 .collect::<Vec<_>>();
             let index = this.blocks.add_node(Block {

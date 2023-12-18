@@ -31,6 +31,7 @@ pub enum Instr {
 
     MatchField(RegIndex, Symbol, InstrIndex),
     Jump(InstrIndex),
+    Return(RegIndex),
 
     Spawn(RegIndex),
     LoadControl(RegIndex),
@@ -70,7 +71,6 @@ pub struct Compiler {
     capture_scopes: Vec<HashMap<String, RegIndex>>,
     captures: Vec<String>,
     forward_captures: HashMap<String, Vec<(RegIndex, usize)>>,
-    return_indexes: Vec<InstrIndex>,
     break_indexes: Vec<InstrIndex>,
     continue_jump_index: Option<InstrIndex>,
     description_hint: String,
@@ -113,6 +113,7 @@ impl Compiler {
         assert_eq!(self.reg_index, 0);
         assert_eq!(self.reg_count, 0);
         self.compile_expr(expr)?;
+        self.instrs.push(Instr::Return(0));
         let chunk = Chunk {
             description: name.clone(),
             arity: 0,
@@ -237,7 +238,6 @@ impl Compiler {
                     scope.insert(name, i as _);
                 }
                 self.scopes.push(scope);
-                let saved_return_indexes = take(&mut self.return_indexes);
                 let saved_continue_jump_index = take(&mut self.continue_jump_index);
                 let saved_break_indexes = take(&mut self.break_indexes);
                 let saved_instrs = take(&mut self.instrs);
@@ -246,14 +246,7 @@ impl Compiler {
                 let saved_reg_count = take(&mut self.reg_count);
                 // println!("{:?}", self.capture_scopes);
                 self.compile_expr(*abstraction.expr)?;
-                self.instrs.push(Instr::Copy(0, arity as _));
-                let return_jump_index = self.instrs.len();
-                for return_index in replace(&mut self.return_indexes, saved_return_indexes) {
-                    let Instr::Jump(index) = &mut self.instrs[return_index] else {
-                        unreachable!()
-                    };
-                    *index = return_jump_index
-                }
+                self.instrs.push(Instr::Return(arity as _));
                 self.continue_jump_index = saved_continue_jump_index;
                 self.break_indexes = saved_break_indexes;
                 let chunk_index = self.chunks.len();
@@ -437,9 +430,7 @@ impl Compiler {
             }
             Expr::Return(expr) => {
                 self.compile_expr(*expr)?;
-                self.instrs.push(Instr::Copy(0, reg_index));
-                self.return_indexes.push(self.instrs.len());
-                self.instrs.push(Instr::Jump(InstrIndex::MAX))
+                self.instrs.push(Instr::Return(reg_index))
             }
             Expr::Break => {
                 self.break_indexes.push(self.instrs.len());
