@@ -28,11 +28,12 @@ pub struct Evaluator {
 pub struct EvaluatorConsts {
     chunks: Vec<Chunk>,
     lang_indexes: HashMap<String, ChunkIndex>,
-    symbols: Vec<String>,
     intrinsics: HashMap<ChunkIndex, Intrinsic>,
-    symbol_chunk: Symbol,
+    symbols: Vec<String>,
     symbol_true: Symbol,
     symbol_false: Symbol,
+    record_names: Vec<Symbol>,
+    record_name_offsets: Vec<usize>,
 }
 
 type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
@@ -92,14 +93,18 @@ impl EvaluatorConsts {
             "imported module not compiled: {:?}",
             compiler.next_imported()
         );
+        compiler
+            .record_name_offsets
+            .push(compiler.record_names.len());
         let mut this = Self {
-            symbol_chunk: compiler.intern("%chunk".into()),
             symbol_true: compiler.intern("True".into()),
             symbol_false: compiler.intern("False".into()),
             chunks: compiler.chunks,
             symbols: compiler.symbols,
             lang_indexes: compiler.lang_indexes,
             intrinsics: Default::default(),
+            record_names: compiler.record_names,
+            record_name_offsets: compiler.record_name_offsets,
         };
         this.link("panic", Evaluator::intrinsic_panic);
         value::link(&mut this);
@@ -184,18 +189,23 @@ impl Evaluator {
                             }
                         }
                     }
-                    Instr::LoadRecord(i, rows) => {
-                        let record = rows
-                            .iter()
-                            .map(|(symbol, i)| (*symbol, r[i].clone()))
-                            .collect::<Record>();
+                    Instr::LoadRecord(i, type_index, fields) => {
+                        let record = Record {
+                            type_index: *type_index,
+                            fields: fields.iter().map(|j| r[j].clone()).collect(),
+                        };
                         r[i] = Value::Dyn(self.allocator.alloc(record))
                     }
                     Instr::LoadChunk(i, chunk_index) => r[i] = Value::ChunkIndex(*chunk_index),
                     Instr::LoadField(i, j, symbol) => {
                         let rj = r[j].downcast_ref::<Record>().map_err(err)?;
-                        if let Some(value) = rj.get(symbol) {
-                            r[i] = value.clone()
+                        if let Some(index) =
+                            self.consts.record_names[self.consts.record_name_offsets[rj.type_index]
+                                ..self.consts.record_name_offsets[rj.type_index + 1]]
+                                .iter()
+                                .position(|s| s == symbol)
+                        {
+                            r[i] = rj.fields[index].clone()
                         } else {
                             Err(err(EvalErrorKind::FieldError(
                                 self.consts.symbols[*symbol].clone(),
@@ -205,8 +215,14 @@ impl Evaluator {
                     Instr::StoreField(i, symbol, j) => {
                         let rj = r[j].clone();
                         let ri = r[i].downcast_mut::<Record>().map_err(err)?;
-                        let evicted = ri.insert(*symbol, rj);
-                        if evicted.is_none() {
+                        if let Some(index) =
+                            self.consts.record_names[self.consts.record_name_offsets[ri.type_index]
+                                ..self.consts.record_name_offsets[ri.type_index + 1]]
+                                .iter()
+                                .position(|s| s == symbol)
+                        {
+                            ri.fields[index] = rj
+                        } else {
                             Err(err(EvalErrorKind::FieldError(
                                 self.consts.symbols[*symbol].clone(),
                             )))?
@@ -287,13 +303,10 @@ impl Evaluator {
                             }
                         } else {
                             let ri = r[i].downcast_ref::<Record>().map_err(err)?;
-                            if ri.contains_key(&self.consts.symbol_chunk) {
-                                Err(err(EvalErrorKind::TypeError(
-                                    "(Abstraction)".into(),
-                                    "Record".into(),
-                                )))?
-                            }
-                            ri.contains_key(symbol)
+                            self.consts.record_names[self.consts.record_name_offsets[ri.type_index]
+                                ..self.consts.record_name_offsets[ri.type_index + 1]]
+                                .iter()
+                                .any(|s| s == symbol)
                         };
                         if !matched {
                             frame.instr_pointer = *instr;

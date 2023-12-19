@@ -12,7 +12,7 @@ use petgraph::{
 
 use crate::{
     ast::Operator,
-    compile::{ChunkIndex, ConstIndex, Instr, InstrIndex, Symbol},
+    compile::{ChunkIndex, ConstIndex, Instr, InstrIndex, RecordTypeIndex, Symbol},
 };
 
 type ValueIndex = usize;
@@ -46,7 +46,7 @@ enum Op {
     Chunk(ChunkIndex),
     Copy,
     Phi,
-    Record(Vec<Symbol>),
+    Record(RecordTypeIndex),
     Field(Symbol),
     Operator(Operator),
     Apply,
@@ -179,11 +179,11 @@ impl Chunk {
                             uses: Default::default(),
                         },
                     ),
-                    Instr::LoadRecord(r, rows) => this.define_effect(
+                    Instr::LoadRecord(r, type_index, fields) => this.define_effect(
                         *r as _,
                         Value {
-                            op: Op::Record(rows.iter().map(|(symbol, _)| *symbol).collect()),
-                            uses: rows.iter().map(|(_, v)| *v as _).collect(),
+                            op: Op::Record(*type_index),
+                            uses: fields.iter().map(|v| *v as _).collect(),
                         },
                     ),
                     Instr::LoadField(r, s, symbol) => this.define_effect(

@@ -12,13 +12,14 @@ pub type ConstIndex = usize;
 pub type RegIndex = u8;
 pub type InstrIndex = usize;
 pub type ChunkIndex = usize;
+pub type RecordTypeIndex = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instr {
     LoadUnit(RegIndex),
     LoadConst(RegIndex, ConstIndex),
     LoadField(RegIndex, RegIndex, Symbol),
-    LoadRecord(RegIndex, Vec<(Symbol, RegIndex)>),
+    LoadRecord(RegIndex, RecordTypeIndex, Vec<RegIndex>),
     LoadChunk(RegIndex, ChunkIndex),
     LoadCapture(RegIndex, usize),
 
@@ -59,6 +60,9 @@ pub struct Compiler {
     pub chunks: Vec<Chunk>,
     pub lang_indexes: HashMap<String, ChunkIndex>,
     pub symbols: Vec<String>,
+    pub record_names: Vec<Symbol>,
+    pub record_name_offsets: Vec<usize>,
+    record_name_indexes: HashMap<Vec<Symbol>, usize>,
     symbol_indexes: HashMap<String, Symbol>,
     modules: HashMap<String, ChunkIndex>,
     module_placeholders: HashMap<String, ChunkIndex>,
@@ -105,6 +109,18 @@ impl Compiler {
                 self.symbols.push(symbol);
                 s
             })
+    }
+
+    fn alloc_record_type(&mut self, mut symbols: Vec<Symbol>) -> RecordTypeIndex {
+        symbols.sort_unstable();
+        if let Some(index) = self.record_name_indexes.get(&symbols) {
+            return *index;
+        }
+        let index = self.record_name_offsets.len();
+        self.record_name_offsets.push(self.record_names.len());
+        self.record_names.extend(symbols.clone());
+        self.record_name_indexes.insert(symbols, index);
+        index
     }
 
     pub fn compile_module(&mut self, name: String, expr: ExprO) -> anyhow::Result<ChunkIndex> {
@@ -206,17 +222,29 @@ impl Compiler {
                 self.instrs.push(Instr::LoadConst(reg_index, const_index))
             }
             Expr::Record(rows) => {
-                let mut operands = Vec::new();
+                let mut symbols = Vec::new();
                 let saved_description_hint = take(&mut self.description_hint);
                 for (name, expr) in rows {
                     self.reg_index += 1;
                     self.description_hint = name.clone();
                     self.compile_expr(expr)?;
-                    let symbol = self.intern(name);
-                    operands.push((symbol, self.reg_index));
+                    symbols.push(self.intern(name))
                 }
                 self.description_hint = saved_description_hint;
-                self.instrs.push(Instr::LoadRecord(reg_index, operands))
+                let type_index = self.alloc_record_type(symbols.clone());
+                let fields = symbols
+                    .into_iter()
+                    .map(|symbol| {
+                        reg_index
+                            + self.record_names[self.record_name_offsets[type_index]..]
+                                .iter()
+                                .position(|s| *s == symbol)
+                                .unwrap() as RegIndex
+                            + 1
+                    })
+                    .collect();
+                self.instrs
+                    .push(Instr::LoadRecord(reg_index, type_index, fields))
             }
             Expr::Abstraction(abstraction) => {
                 let arity = abstraction.variables.len();
@@ -510,11 +538,13 @@ impl Display for DisassembleChunk<'_> {
                 Instr::MatchField(_, symbol, _) => {
                     write!(f, " {}", self.compiler.symbols[*symbol])?
                 }
-                Instr::LoadRecord(_, rows) => write!(
+                Instr::LoadRecord(_, type_index, fields) => write!(
                     f,
                     " {}",
-                    rows.iter()
-                        .map(|(symbol, _)| &*self.compiler.symbols[*symbol])
+                    self.compiler.record_names[self.compiler.record_name_offsets[*type_index]..]
+                        .iter()
+                        .take(fields.len())
+                        .map(|symbol| &*self.compiler.symbols[*symbol])
                         .collect::<Vec<_>>()
                         .join(" ")
                 )?,

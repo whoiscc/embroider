@@ -1,11 +1,10 @@
 use std::{
     any::{type_name, Any},
-    collections::HashMap,
     ops::Deref,
 };
 
 use crate::{
-    compile::{ChunkIndex, Symbol},
+    compile::{ChunkIndex, RecordTypeIndex},
     eval::{EvalErrorKind, EvaluatorConsts, I},
     gc::Addr,
     Evaluator,
@@ -212,15 +211,14 @@ impl ValueType for Closure {
     fn trace(&self) {} // TODO
 }
 
-pub type Record = HashMap<Symbol, Value>;
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub type_index: RecordTypeIndex,
+    pub fields: Vec<Value>,
+}
 
 impl ValueType for Record {
-    fn type_name(&self) -> &str {
-        // TODO closure
-        "Record"
-    }
-
-    fn trace(&self) {}
+    fn trace(&self) {} // TODO
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

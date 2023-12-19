@@ -4,8 +4,8 @@ builtin = import "builtin"
 std = import "std"
 
 U64 = builtin.U64
-print = builtin.print
-repr = builtin.repr
+print = std.print
+repr = std.repr
 Instant = std.Instant
 Vec = std.Vec
 
