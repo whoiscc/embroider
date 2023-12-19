@@ -27,6 +27,10 @@ pub enum Expr {
     Match(Match),
     Loop(Box<ExprO>),
 
+    // the concurrent primitives can be expressed as applying and do not require dedicated syntax
+    // these syntax are for evaluator to identify them from bytecode, this is necessary because 
+    // (currently) intrinsics have no access to `Worker` and these primitives cannot be implemented
+    // as intrinsics
     Spawn(Box<ExprO>),
     Control,
     Suspend(Box<ExprO>),

@@ -1,5 +1,6 @@
 {
-print: func(a) lang print ()
-repr: func(a) lang repr ()
+# provided by evaluator
+panic: func(a) lang panic ()
+# provided by value
 U64: func(a) lang value_u64 ()
 }

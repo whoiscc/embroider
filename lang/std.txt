@@ -1,4 +1,7 @@
 {
+print: func(a) lang print ()
+repr: func(a) lang repr ()
+
 Instant: {
     now: func() lang instant_now ()
     elapsed: func(a) lang instant_elapsed ()

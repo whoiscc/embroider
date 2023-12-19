@@ -101,8 +101,6 @@ impl EvaluatorConsts {
             lang_indexes: compiler.lang_indexes,
             intrinsics: Default::default(),
         };
-        this.link("print", Evaluator::intrinsic_print);
-        this.link("repr", Evaluator::intrinsic_repr);
         this.link("panic", Evaluator::intrinsic_panic);
         value::link(&mut this);
         this
@@ -350,6 +348,7 @@ impl Evaluator {
                     }
                 }
             }
+            unreachable!()
             // println!("{:?}", self.registers);
         }
         Ok(())
@@ -430,23 +429,6 @@ impl Evaluator {
         } else {
             unreachable!()
         };
-        Ok(())
-    }
-
-    fn intrinsic_print(&mut self) -> Result<(), EvalErrorKind> {
-        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let r0 = r[0].downcast_ref::<value::String>()?;
-        println!("{}", &**r0);
-        r[0] = Value::Unit;
-        Ok(())
-    }
-
-    fn intrinsic_repr(&mut self) -> Result<(), EvalErrorKind> {
-        let mut r = I(&mut self.registers, self.intrinsic_base_pointer);
-        let repr = format!("{:?}", r[0]);
-        r[0] = Value::Dyn(self.allocator.alloc(value::String(repr)));
-        // println!("{:?}", r[0]);
-        // println!("{}", r[0].type_name());
         Ok(())
     }
 

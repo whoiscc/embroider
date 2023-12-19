@@ -1,8 +1,25 @@
 use embroider::{
     eval::{EvalErrorKind, EvaluatorConsts, I},
-    value::ValueType,
+    value::{self, ValueType},
     Evaluator, Value,
 };
+
+fn intrinsic_print(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+    let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+    let r0 = r[0].downcast_ref::<value::String>()?;
+    println!("{}", &**r0);
+    r[0] = Value::Unit;
+    Ok(())
+}
+
+fn intrinsic_repr(evaluator: &mut Evaluator) -> Result<(), EvalErrorKind> {
+    let mut r = I(&mut evaluator.registers, evaluator.intrinsic_base_pointer);
+    let repr = format!("{:?}", r[0]);
+    r[0] = Value::Dyn(evaluator.allocator.alloc(value::String(repr)));
+    // println!("{:?}", r[0]);
+    // println!("{}", r[0].type_name());
+    Ok(())
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Vec(std::vec::Vec<Value>);
@@ -103,6 +120,8 @@ impl Instant {
 }
 
 pub fn link(evaluator: &mut EvaluatorConsts) {
+    evaluator.link("print", intrinsic_print);
+    evaluator.link("repr", intrinsic_repr);
     evaluator.link("instant_now", Instant::intrinsic_now);
     evaluator.link("instant_elapsed", Instant::intrinsic_elapsed);
     evaluator.link("vec_new", Vec::intrinsic_new);
