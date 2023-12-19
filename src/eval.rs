@@ -39,8 +39,8 @@ type Intrinsic = fn(&mut Evaluator) -> Result<(), EvalErrorKind>;
 
 #[derive(Debug)]
 struct Frame {
-    closure: Value,
     chunk_index: ChunkIndex,
+    captures: Vec<Value>,
     base_pointer: usize,
     instr_pointer: usize,
 }
@@ -151,13 +151,13 @@ impl IndexMut<&RegIndex> for I<'_> {
 }
 
 impl Evaluator {
-    pub fn push_entry_frame(&mut self, chunk_index: ChunkIndex, closure: Value) {
+    pub fn push_entry_frame(&mut self, chunk_index: ChunkIndex, captures: Vec<Value>) {
         assert!(self.frames.is_empty());
         self.registers
             .resize(self.consts.chunks[chunk_index].reg_count, Value::Invalid);
         self.frames.push(Frame {
-            closure,
             chunk_index,
+            captures,
             base_pointer: 0,
             instr_pointer: 0,
         })
@@ -165,6 +165,7 @@ impl Evaluator {
 
     pub fn eval(&mut self, worker: &mut Worker) -> anyhow::Result<()> {
         'next: while let Some(frame) = self.frames.last_mut() {
+            let mut r = I(&mut self.registers, frame.base_pointer);
             let chunk = &self.consts.chunks[frame.chunk_index];
             for instr in &chunk.instrs[frame.instr_pointer..] {
                 // let instr = &chunk.instrs[frame.instr_pointer];
@@ -174,7 +175,6 @@ impl Evaluator {
                     move |kind| EvalError(kind, chunk_index, instr_pointer)
                 };
                 frame.instr_pointer += 1;
-                let mut r = I(&mut self.registers, frame.base_pointer);
                 // println!("{instr:?}");
                 match instr {
                     Instr::LoadUnit(i) => r[i] = Value::Unit,
@@ -205,12 +205,6 @@ impl Evaluator {
                         }
                     }
                     Instr::StoreField(i, symbol, j) => {
-                        if matches!(r[i], Value::ChunkIndex(_)) {
-                            // println!("chunk -> closure");
-                            let mut record = HashMap::new();
-                            record.insert(self.consts.symbol_chunk, r[i].clone());
-                            r[i] = Value::Dyn(self.allocator.alloc(record));
-                        }
                         let rj = r[j].clone();
                         let ri = r[i].downcast_mut::<Record>().map_err(err)?;
                         let evicted = ri.insert(*symbol, rj);
@@ -221,9 +215,7 @@ impl Evaluator {
                         }
                     }
                     Instr::LoadCapture(i, index) => {
-                        // should always success actually
-                        let rj = frame.closure.downcast_ref::<Closure>().map_err(err)?;
-                        let value = rj.captures[*index].clone();
+                        let value = frame.captures[*index].clone();
                         if matches!(value, Value::Invalid) {
                             Err(err(EvalErrorKind::CaptureError))?
                         }
@@ -246,148 +238,15 @@ impl Evaluator {
                     }
                     Instr::Copy(i, j) => r[i] = r[j].clone(),
                     Instr::Operator(i, op, xs) => {
-                        r[i] = if xs.len() == 2 {
-                            match (op, &r[&xs[0]], &r[&xs[1]]) {
-                                (Operator::Add, Value::I32(a), Value::I32(b)) => {
-                                    Value::I32(*a + *b)
-                                }
-                                (Operator::Sub, Value::I32(a), Value::I32(b)) => {
-                                    Value::I32(*a - *b)
-                                }
-                                (Operator::Mul, Value::I32(a), Value::I32(b)) => {
-                                    Value::I32(*a * *b)
-                                }
-                                (Operator::Div, Value::I32(a), Value::I32(b)) => {
-                                    Value::I32(*a / *b)
-                                }
-                                (Operator::Rem, Value::I32(a), Value::I32(b)) => {
-                                    Value::I32(*a % *b)
-                                }
-                                (Operator::Eq, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a == *b)
-                                }
-                                (Operator::Ne, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a != *b)
-                                }
-                                (Operator::Lt, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a < *b)
-                                }
-                                (Operator::Gt, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a > *b)
-                                }
-                                (Operator::Le, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a <= *b)
-                                }
-                                (Operator::Ge, Value::I32(a), Value::I32(b)) => {
-                                    Value::Bool(*a >= *b)
-                                }
-
-                                (Operator::Add, Value::F64(a), Value::F64(b)) => {
-                                    Value::F64(*a + *b)
-                                }
-                                (Operator::Sub, Value::F64(a), Value::F64(b)) => {
-                                    Value::F64(*a - *b)
-                                }
-                                (Operator::Mul, Value::F64(a), Value::F64(b)) => {
-                                    Value::F64(*a * *b)
-                                }
-                                (Operator::Div, Value::F64(a), Value::F64(b)) => {
-                                    Value::F64(*a / *b)
-                                }
-                                (Operator::Rem, Value::F64(a), Value::F64(b)) => {
-                                    Value::F64(*a % *b)
-                                }
-
-                                (Operator::Add, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a + *b)
-                                }
-                                (Operator::Sub, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a - *b)
-                                }
-                                (Operator::Mul, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a * *b)
-                                }
-                                (Operator::Div, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a / *b)
-                                }
-                                (Operator::Rem, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a % *b)
-                                }
-                                (Operator::Eq, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a == *b)
-                                }
-                                (Operator::Ne, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a != *b)
-                                }
-                                (Operator::Lt, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a < *b)
-                                }
-                                (Operator::Gt, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a > *b)
-                                }
-                                (Operator::Le, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a <= *b)
-                                }
-                                (Operator::Ge, Value::U64(a), Value::U64(b)) => {
-                                    Value::Bool(*a >= *b)
-                                }
-                                (Operator::Lsh, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a << *b)
-                                }
-                                (Operator::Rsh, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a >> *b)
-                                }
-                                (Operator::Xor, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a ^ *b)
-                                }
-                                (Operator::Band, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a & *b)
-                                }
-                                (Operator::Bor, Value::U64(a), Value::U64(b)) => {
-                                    Value::U64(*a | *b)
-                                }
-
-                                (Operator::Add, a, b) => {
-                                    if let (Ok(a), Ok(b)) = (
-                                        a.downcast_ref::<value::String>(),
-                                        b.downcast_ref::<value::String>(),
-                                    ) {
-                                        Value::Dyn(
-                                            self.allocator
-                                                .alloc(value::String(String::from(a.clone()) + b)),
-                                        )
-                                    } else {
-                                        Err(err(EvalErrorKind::Operator2TypeError(
-                                            *op,
-                                            r[&xs[0]].type_name().into(),
-                                            r[&xs[1]].type_name().into(),
-                                        )))?
-                                    }
-                                }
-                                _ => Err(err(EvalErrorKind::Operator2TypeError(
-                                    *op,
-                                    r[&xs[0]].type_name().into(),
-                                    r[&xs[1]].type_name().into(),
-                                )))?,
-                            }
-                        } else if xs.len() == 1 {
-                            match (op, &r[&xs[0]]) {
-                                (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
-                                _ => Err(err(EvalErrorKind::Operator1TypeError(
-                                    *op,
-                                    r[&xs[0]].type_name().into(),
-                                )))?,
-                            }
-                        } else {
-                            unreachable!()
-                        }
+                        Self::operator(&mut r, i, op, xs, &mut self.allocator).map_err(err)?
                     }
                     Instr::Apply(i, arity) => {
-                        let chunk_index = if let Value::ChunkIndex(index) = r[i] {
+                        let (chunk_index, captures) = if let Value::ChunkIndex(index) = r[i] {
                             // println!("apply simple chunk");
-                            index
+                            (index, Default::default())
                         } else {
-                            r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
+                            let closure = r[i].downcast_ref::<Closure>().map_err(err)?;
+                            (closure.chunk_index, closure.captures.clone())
                         };
                         if *arity != self.consts.chunks[chunk_index].arity {
                             Err(err(EvalErrorKind::ArityError(
@@ -406,8 +265,8 @@ impl Evaluator {
                             r[i] = r[i + 1].clone()
                         } else {
                             let frame = Frame {
-                                closure: r[i].clone(),
                                 chunk_index,
+                                captures,
                                 base_pointer: frame.base_pointer + *i as usize + 1,
                                 instr_pointer: 0,
                             };
@@ -460,11 +319,11 @@ impl Evaluator {
                     }
                     Instr::Spawn(i) => {
                         // repeating `Apply`
-                        let chunk_index = if let Value::ChunkIndex(index) = r[i] {
-                            // println!("apply simple chunk");
-                            index
+                        let (chunk_index, captures) = if let Value::ChunkIndex(index) = r[i] {
+                            (index, Default::default())
                         } else {
-                            r[i].downcast_ref::<Closure>().map_err(err)?.chunk_index
+                            let closure = r[i].downcast_ref::<Closure>().map_err(err)?;
+                            (closure.chunk_index, closure.captures.clone())
                         };
                         if self.consts.chunks[chunk_index].arity != 0 {
                             Err(err(EvalErrorKind::ArityError(
@@ -475,7 +334,7 @@ impl Evaluator {
                         if self.consts.intrinsics.contains_key(&chunk_index) {
                             Err(err(EvalErrorKind::SpawnIntrinsicError(chunk_index)))?
                         }
-                        worker.spawn(chunk_index, r[i].clone())?
+                        worker.spawn(chunk_index, captures)?
                     }
                     Instr::LoadControl(i) => {
                         r[i] = Value::Dyn(self.allocator.alloc(worker.new_control()))
@@ -493,6 +352,84 @@ impl Evaluator {
             }
             // println!("{:?}", self.registers);
         }
+        Ok(())
+    }
+
+    fn operator(
+        r: &mut I<'_>,
+        i: &RegIndex,
+        op: &Operator,
+        xs: &[RegIndex],
+        allocator: &mut Allocator,
+    ) -> Result<(), EvalErrorKind> {
+        r[i] = if xs.len() == 2 {
+            match (op, &r[&xs[0]], &r[&xs[1]]) {
+                (Operator::Add, Value::I32(a), Value::I32(b)) => Value::I32(*a + *b),
+                (Operator::Sub, Value::I32(a), Value::I32(b)) => Value::I32(*a - *b),
+                (Operator::Mul, Value::I32(a), Value::I32(b)) => Value::I32(*a * *b),
+                (Operator::Div, Value::I32(a), Value::I32(b)) => Value::I32(*a / *b),
+                (Operator::Rem, Value::I32(a), Value::I32(b)) => Value::I32(*a % *b),
+                (Operator::Eq, Value::I32(a), Value::I32(b)) => Value::Bool(*a == *b),
+                (Operator::Ne, Value::I32(a), Value::I32(b)) => Value::Bool(*a != *b),
+                (Operator::Lt, Value::I32(a), Value::I32(b)) => Value::Bool(*a < *b),
+                (Operator::Gt, Value::I32(a), Value::I32(b)) => Value::Bool(*a > *b),
+                (Operator::Le, Value::I32(a), Value::I32(b)) => Value::Bool(*a <= *b),
+                (Operator::Ge, Value::I32(a), Value::I32(b)) => Value::Bool(*a >= *b),
+
+                (Operator::Add, Value::F64(a), Value::F64(b)) => Value::F64(*a + *b),
+                (Operator::Sub, Value::F64(a), Value::F64(b)) => Value::F64(*a - *b),
+                (Operator::Mul, Value::F64(a), Value::F64(b)) => Value::F64(*a * *b),
+                (Operator::Div, Value::F64(a), Value::F64(b)) => Value::F64(*a / *b),
+                (Operator::Rem, Value::F64(a), Value::F64(b)) => Value::F64(*a % *b),
+
+                (Operator::Add, Value::U64(a), Value::U64(b)) => Value::U64(*a + *b),
+                (Operator::Sub, Value::U64(a), Value::U64(b)) => Value::U64(*a - *b),
+                (Operator::Mul, Value::U64(a), Value::U64(b)) => Value::U64(*a * *b),
+                (Operator::Div, Value::U64(a), Value::U64(b)) => Value::U64(*a / *b),
+                (Operator::Rem, Value::U64(a), Value::U64(b)) => Value::U64(*a % *b),
+                (Operator::Eq, Value::U64(a), Value::U64(b)) => Value::Bool(*a == *b),
+                (Operator::Ne, Value::U64(a), Value::U64(b)) => Value::Bool(*a != *b),
+                (Operator::Lt, Value::U64(a), Value::U64(b)) => Value::Bool(*a < *b),
+                (Operator::Gt, Value::U64(a), Value::U64(b)) => Value::Bool(*a > *b),
+                (Operator::Le, Value::U64(a), Value::U64(b)) => Value::Bool(*a <= *b),
+                (Operator::Ge, Value::U64(a), Value::U64(b)) => Value::Bool(*a >= *b),
+                (Operator::Lsh, Value::U64(a), Value::U64(b)) => Value::U64(*a << *b),
+                (Operator::Rsh, Value::U64(a), Value::U64(b)) => Value::U64(*a >> *b),
+                (Operator::Xor, Value::U64(a), Value::U64(b)) => Value::U64(*a ^ *b),
+                (Operator::Band, Value::U64(a), Value::U64(b)) => Value::U64(*a & *b),
+                (Operator::Bor, Value::U64(a), Value::U64(b)) => Value::U64(*a | *b),
+
+                (Operator::Add, a, b) => {
+                    if let (Ok(a), Ok(b)) = (
+                        a.downcast_ref::<value::String>(),
+                        b.downcast_ref::<value::String>(),
+                    ) {
+                        Value::Dyn(allocator.alloc(value::String(String::from(a.clone()) + b)))
+                    } else {
+                        Err(EvalErrorKind::Operator2TypeError(
+                            *op,
+                            r[&xs[0]].type_name().into(),
+                            r[&xs[1]].type_name().into(),
+                        ))?
+                    }
+                }
+                _ => Err(EvalErrorKind::Operator2TypeError(
+                    *op,
+                    r[&xs[0]].type_name().into(),
+                    r[&xs[1]].type_name().into(),
+                ))?,
+            }
+        } else if xs.len() == 1 {
+            match (op, &r[&xs[0]]) {
+                (Operator::Neg, Value::I32(a)) => Value::I32(-*a),
+                _ => Err(EvalErrorKind::Operator1TypeError(
+                    *op,
+                    r[&xs[0]].type_name().into(),
+                ))?,
+            }
+        } else {
+            unreachable!()
+        };
         Ok(())
     }
 
