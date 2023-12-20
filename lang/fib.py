@@ -9,5 +9,5 @@ def fib(n):
 
 
 start = time.time()
-print(fib(35))
+print("fib(35) = " + repr(fib(35)))
 print(time.time() - start)

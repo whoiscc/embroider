@@ -205,6 +205,8 @@ impl Evaluator {
                                 .iter()
                                 .position(|s| s == symbol)
                         {
+                            // println!("{instr:?}");
+                            // println!("symbol {symbol} index {index}");
                             r[i] = rj.fields[index].clone()
                         } else {
                             Err(err(EvalErrorKind::FieldError(

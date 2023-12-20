@@ -13,7 +13,7 @@ fib = func(n)
     | {False} fib(n - 1) + fib(n - 2) (
 
 with start = Instant.now() (
-print(repr(fib(10)))
+print("fib(10) = " + repr(fib(10)))
 print(repr(fib(35) == 9227465))
 print(repr(Instant.elapsed(start)))
 ))

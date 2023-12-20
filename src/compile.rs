@@ -233,14 +233,12 @@ impl Compiler {
                 }
                 self.description_hint = saved_description_hint;
                 let type_index = self.alloc_record_type(symbols.clone());
-                let fields = symbols
-                    .into_iter()
+                let fields = self.record_names[self.record_name_offsets[type_index]..]
+                    .iter()
+                    .take(symbols.len())
                     .map(|symbol| {
                         reg_index
-                            + self.record_names[self.record_name_offsets[type_index]..]
-                                .iter()
-                                .position(|s| *s == symbol)
-                                .unwrap() as RegIndex
+                            + symbols.iter().position(|s| s == symbol).unwrap() as RegIndex
                             + 1
                     })
                     .collect();
