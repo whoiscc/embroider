@@ -233,6 +233,7 @@ impl Evaluator {
                         if matches!(value, Value::Invalid) {
                             Err(err(EvalErrorKind::CaptureError))?
                         }
+                        // println!("{instr:?}");
                         r[i] = value
                     }
                     Instr::StoreCapture(i, index, j) => {
@@ -251,6 +252,10 @@ impl Evaluator {
                         ri.captures[*index] = rj
                     }
                     Instr::Copy(i, j) => r[i] = r[j].clone(),
+                    // Instr::Copy(i, j) => {
+                    //     println!("{instr:?}");
+                    //     r[i] = r[j].clone()
+                    // }
                     Instr::Operator(i, op, xs) => {
                         Self::operator(&mut r, i, op, xs, &mut self.allocator).map_err(err)?
                     }
@@ -294,7 +299,9 @@ impl Evaluator {
                         }
                         continue 'next;
                     }
-                    Instr::MatchField(i, symbol, instr) => {
+                    Instr::MatchField(i, symbol, instr_pointer) => {
+                        // println!("{instr:?}");
+                        // println!("r[{i}] = {:?}", r[i]);
                         let matched = if let Value::Bool(b) = r[i] {
                             if b {
                                 *symbol == self.consts.symbol_true
@@ -309,7 +316,7 @@ impl Evaluator {
                                 .any(|s| s == symbol)
                         };
                         if !matched {
-                            frame.instr_pointer = *instr;
+                            frame.instr_pointer = *instr_pointer;
                             continue 'next;
                         }
                     }
@@ -319,12 +326,22 @@ impl Evaluator {
                     }
                     Instr::Return(i) => {
                         let ri = r[i].clone();
-                        let frame = self.frames.pop().unwrap();
-                        // workaround before updating `Apply`
-                        if !self.frames.is_empty() {
-                            self.registers[frame.base_pointer - 1] = ri
-                            // TODO
-                            // self.registers.truncate(frame.base_pointer)
+                        let returning_index = self.frames.pop().unwrap().base_pointer - 1;
+                        if let Some(frame) = self.frames.last() {
+                            self.registers[returning_index] = ri;
+                            self.registers.resize(
+                                frame.base_pointer
+                                    + self.consts.chunks[frame.chunk_index].reg_count,
+                                Value::Invalid,
+                            )
+                            // println!("{instr:?}");
+                            // println!(
+                            //     "bp = {} #reg = {}",
+                            //     frame.base_pointer, self.consts.chunks[frame.chunk_index].reg_count
+                            // );
+                            // println!("registers.len = {}", self.registers.len());
+                        } else {
+                            self.registers.clear()
                         }
                         continue 'next;
                     }

@@ -6,7 +6,7 @@ Instant = {
     elapsed: func(a) lang instant_elapsed ()
 }
 some = func(value) { Some: value }
-none = {None: ()}
+none = { None: () }
 
 tree = func(item, depth)
     capture tree
@@ -17,7 +17,7 @@ tree = func(item, depth)
             right = tree(item2, depth - 1)
             ({ item: item, depth: depth, left: some(left), right: some(right) })
         | {False}
-            {item: item, depth: depth, left: none, right: none} (
+            { item: item, depth: depth, left: none, right: none } (
 
 with
 check = func(node)

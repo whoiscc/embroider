@@ -179,6 +179,7 @@ impl Compiler {
                 self.captures.push(name.clone());
                 // is it always safe to directly use slot `self.reg_index`?
                 self.instrs.push(Instr::LoadCapture(self.reg_index, index));
+                self.reg_count = self.reg_count.max(self.reg_index as usize + 1);
                 return Ok(self.reg_index);
             }
         }
@@ -188,7 +189,7 @@ impl Compiler {
     // convention: anything below `self.reg_index` is unchanged
     // `self.reg_index` is updated with expr's evaluated value
     // anything above `self.ref_index` is ok to be overwritten
-    // return, break and continue does not follow this convention
+    // control flow instructions does not follow this convention
     fn compile_expr(&mut self, expr: ExprO) -> anyhow::Result<()> {
         let reg_index = self.reg_index;
         self.reg_count = self.reg_count.max(reg_index as usize + 1);

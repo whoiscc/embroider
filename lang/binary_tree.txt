@@ -5,8 +5,8 @@ Instant = {
     now: func() lang instant_now ()
     elapsed: func(a) lang instant_elapsed ()
 }
-some = func(value) {Some: value}
-none = {None: ()}
+some = func(value) { Some: value }
+none = { None: () }
 
 tree_class = func(self) func(rep) {
     check: func() match rep.left
