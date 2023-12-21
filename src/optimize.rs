@@ -48,6 +48,7 @@ enum Op {
     Phi,
     Record(RecordTypeIndex),
     Field(Symbol),
+    Capture(usize),
     Operator(Operator),
     Apply,
     Control,
@@ -57,6 +58,7 @@ enum Op {
 enum Effect {
     Define(ValueIndex, usize),
     StoreField(ValueIndex, Symbol, ValueIndex),
+    StoreCapture(ValueIndex, usize, ValueIndex),
     Spawn(ValueIndex),
     Suspend(ValueIndex),
     Resume(ValueIndex),
@@ -193,7 +195,13 @@ impl Chunk {
                             uses: vec![*s as _],
                         },
                     ),
-                    Instr::LoadCapture(..) | Instr::StoreCapture(..) => todo!(),
+                    Instr::LoadCapture(r, index) => this.define_effect(
+                        *r as _,
+                        Value {
+                            op: Op::Capture(*index),
+                            uses: Vec::new(),
+                        },
+                    ),
                     Instr::Copy(r, s) => this.define_effect(
                         *r as _,
                         Value {
@@ -224,6 +232,9 @@ impl Chunk {
                     ),
                     Instr::StoreField(r, symbol, s) => {
                         Effect::StoreField(*r as _, *symbol, *s as _)
+                    }
+                    Instr::StoreCapture(r, index, s) => {
+                        Effect::StoreCapture(*r as _, *index, *s as _)
                     }
                     Instr::Spawn(r) => Effect::Spawn(*r as _),
                     Instr::Suspend(r) => Effect::Suspend(*r as _),
@@ -301,6 +312,7 @@ impl Chunk {
         // println!("{DF:?}");
 
         for (v, versions) in &mut self.values {
+            // println!("{v}");
             let mut F = HashSet::<NodeIndex>::new();
             let mut W = self
                 .blocks
@@ -313,8 +325,9 @@ impl Chunk {
                     }
                 })
                 .collect::<BTreeSet<_>>();
+            let defs_v = W.clone();
             while let Some(X) = W.pop_first() {
-                // println!("{X:?} {:?}", DF[&X]);
+                // println!("{X:?} {:?}", DF.get(&X));
                 for Y in DF.get(&X).unwrap_or(&Default::default()) {
                     if !F.contains(Y) {
                         // TODO generalize to variable number of predecessors
@@ -326,13 +339,14 @@ impl Chunk {
                         });
                         self.blocks[*Y].phis.insert(*v, version);
                         F.insert(*Y);
-                        if !self.blocks[*Y].defines().contains(v) {
+                        if !defs_v.contains(Y) {
                             W.insert(*Y);
                         }
                     }
                 }
             }
         }
+        // println!("{self}");
 
         let mut chunk = Chunk {
             entry: self.entry,
@@ -410,12 +424,25 @@ impl Chunk {
                         update_reaching_def(*v, &mut reaching_def, &definition_indexes);
                         *v = reaching_def[v]
                     }
+                    Effect::StoreCapture(closure_v, _, v) => {
+                        update_reaching_def(*closure_v, &mut reaching_def, &definition_indexes);
+                        *closure_v = reaching_def[closure_v];
+                        update_reaching_def(*v, &mut reaching_def, &definition_indexes);
+                        *v = reaching_def[v]
+                    }
                     Effect::Spawn(v) | Effect::Suspend(v) | Effect::Resume(v) => {
                         update_reaching_def(*v, &mut reaching_def, &definition_indexes);
                         *v = reaching_def[v]
                     }
                 }
                 chunk.blocks[BB].effects.push(effect)
+            }
+            match &mut chunk.blocks[BB].exit {
+                Exit::Jump => {}
+                Exit::Match(v, _) | Exit::Return(v) => {
+                    update_reaching_def(*v, &mut reaching_def, &definition_indexes);
+                    *v = reaching_def[v]
+                }
             }
             for b in self.blocks.neighbors(BB) {
                 let index = self
@@ -433,6 +460,7 @@ impl Chunk {
                 } else {
                     (&self.blocks[b].phis, &mut self.values)
                 };
+                // println!("{:?}", self.blocks[BB].defines());
                 for (v, version) in phis {
                     let value = &mut values.get_mut(v).unwrap()[*version];
                     // println!("{v}.{version} = {value:?}");
@@ -519,7 +547,7 @@ mod tests {
             Instr::Copy(0, 3),
             Instr::MatchField(2, Symbol::MAX, 0),
             // E offset 14
-            Instr::Copy(0, 0),
+            Instr::Return(0),
         ]
     }
 
